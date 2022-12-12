@@ -4,63 +4,65 @@
  * This file makes it possible to fix an error in Dafny in no time.
  * Add the following alias in your bash profile:
  * 
- * alias fix='node scripts/fix-dafny-issue.js'
+ *     alias fix='node scripts/fix-dafny-issue.js'
  * 
  * First usage
  * 
- * > fix [<issueNumber> [<issueKeyword>]]
+ *     > fix [<issueNumber> [<issueKeyword>]]
  * 
- * This script will automate for you and ask questions as appropriate to
- * - Ask you for the issue number and issue keyword if not provided
- * - Fetch the reproducing code of the issue
- * - Create Test/git-issues/git-issue-<issueNumber>.dfy and Test/git-issues/git-issue-<issueNumber>.dfy.expect
- *   ensuring it contains a header that LIT can parse, considering the possibility that it needs to be run
- * - Open these two files in their default editor.
- * - Create a branch named fix-<issueNumber>-<issueKeyword>, and commit the files there immediately
- * - Provide you information to debug the issue in Rider, in CLI dotnet, or just run Dafny.
+ * This script will automate for you and ask questions as appropriate.
+ * - It asks you for the issue number and issue keyword if not provided
+ * - It fetches the reproducing code of the issue
+ * - It adds the test to the codebase
+ *   - If it's a CI test, it creates `Test/git-issues/git-issue-<issueNumber>.dfy` and `Test/git-issues/git-issue-<issueNumber>.dfy.expect`
+ *     ensuring it contains a header that LIT can parse, considering the possibility that it needs to be run
+ *     Then, it opens these two files in their default editor.
+ *   - If it's a language server tests, it adds the code as a first test to `DafnyLanguageServer.Text/Synchronization/DiagnosticsTest.cs` and 
+ *     creates commented placeholders for the interaction and expected results.
+ * - It creates a branch named `fix-<issueNumber>-<issueKeyword>`, and commits the files there immediately
+ * - It provides you with information to debug the issue in Rider, in CLI dotnet, or just run Dafny.
  * 
- * For an issue that already exists, the command above (with optional issueNumber if it's the same)
- * - Compile and run the tests
- * - If the tests pass, it asks you if you want to commit the changes.
+ * For an issue that already exists, then you enter the command `fix` alone,
+ * - It compiles and runs the tests (CI or Language Server, or both)
+ * - If all the tests pass, it asks you if you want to commit the changes.
  *   If you accept:
- * - Create the doc/dev/news/<issueNumber>.fix file for you
- *   (if it did not exist)
- * - Add all new and modified files
- *   (including other git-issue-<issueNumber><suffix>.dfy files) 
- * - Push the changes
- * - If the first time it's pushed, open your browser with a page
+ * - It creates the `doc/dev/news/<issueNumber>.fix` file for you the first time, asking you about its content
+ * - It adds all new and modified files
+ *   (including other `git-issue-<issueNumber><suffix>.dfy` files)
+ * - It pushes the changes
+ * - If the first time it's pushed, it opens your browser with a page
  *   to create the PR with the title and description already populated.
  * 
  * If you want to switch to another issue that you already initiated,
  * ensure the working directory is clean, and run
  * 
- * fix <existing issue number | pr number | keyword>
+ *     > fix <existing issue number | pr number | keyword>
  * 
- * That will result in
- * - Checking out the branch with the matching issue
- * - Opening the test files in their respective editors
- * - Rebuilding the solution
- * - Providing you with information on how to test the issue.
+ * That will make the script to work:
+ * - It finds and checks out the branch matching the issue number, the PR number, or a keyword
+ * - It opens the test files in their respective editors (for CI tests only)
+ * - It rebuilds the solution
+ * - It provides you with information on how to test the issue.
  * 
- * If you are already in the issue branch but you want to open
- * the test files, just write 
+ * If you are already in the issue branch and you want to re-open
+ * the test files (because you closed them...), just write 
  * 
- * > fix open
+ *     > fix open
  * 
- * If you want to do the publishing without runnning the tests,
- * but only write a commit message, just write
+ * If you want to do the publishing without running the tests, just write
  * 
- * > fix force
+ *     > fix force
  * 
- * If you want to add and open a new test case for the same issue
+ * If you want to add a new or existing test case for the same issue
  * (e.g. Test/git-issues/git-issue-<issueNumber>b.dfy), run
  * 
- * > fix more <optional existing issue # or existing test name>
+ *     > fix more <optional existing issue # or existing test name>
  * 
  * If you just write `fix more`, you will be prompted for the argument.
  * - Providing a number will let you import another GitHub issue.
- * - Providing a an existing test name pattern will ensure that all these
+ * - Providing an existing integration test name pattern will ensure that all these
  *   selected tests are run when you run `fix` without arguments.
+ *   If more than one test is found, you'll be prompted to confirm your choices.
  */
 
 if(process.cwd().endsWith("scripts")) {
@@ -525,7 +527,7 @@ async function commitAllAndPush(testInfo, commitMessage, branchName, testsNowExi
 
 // A test manager either considers
 // - A pair of git-issues/git-issue-<issuenumber>.dfy and its expect file
-// - A simple [TestMethod] in DiagnosticsTests.cs and its assertions.
+// - A simple [TestMethod] in DiagnosticsTest.cs and its assertions.
 
 // A branch can list several tests to consider. All need to run correctly.
 
@@ -788,7 +790,7 @@ async function doAddExistingOrNewTest(testInfo, testInfoLs, moreText) {
 }
 
 // We will want to run tests on the language server at some point
-// (DafnyLanguageServer/Synchronization/DiagnosticsTests.cs).
+// (DafnyLanguageServer/Synchronization/DiagnosticsTest.cs).
 
 // The main function
 async function Main() {
