@@ -14,10 +14,12 @@
  * - It asks you for the issue number and issue keyword if not provided
  * - It fetches the reproducing code of the issue
  * - It adds the test to the codebase
- *   - If it's a CI test, it creates `Test/git-issues/git-issue-<issueNumber>.dfy` and `Test/git-issues/git-issue-<issueNumber>.dfy.expect`
+ *   - If it's a CI test, it creates `Test/git-issues/git-issue-<issueNumber>.dfy`
+ *     and `Test/git-issues/git-issue-<issueNumber>.dfy.expect`
  *     ensuring it contains a header that LIT can parse, considering the possibility that it needs to be run
  *     Then, it opens these two files in their default editor.
- *   - If it's a language server tests, it adds the code as a first test to `DafnyLanguageServer.Text/Synchronization/DiagnosticsTest.cs` and 
+ *   - If it's a language server tests, it adds the code as a first test to
+ *     `DafnyLanguageServer.Text/Synchronization/DiagnosticsTest.cs` and 
  *     creates commented placeholders for the interaction and expected results.
  * - It creates a branch named `fix-<issueNumber>-<issueKeyword>`, and commits the files there immediately
  * - It provides you with information to debug the issue in Rider, in CLI dotnet, or just run Dafny.
