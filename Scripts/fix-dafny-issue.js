@@ -135,6 +135,8 @@ async function ensureWorkingDirectoryClean() {
   }
   return true;
 }
+
+
 // Returns true if the answer can be interpreted as a "yes"
 function ok(answer) {
   return answer.toLowerCase() == "y" || answer == "";
@@ -321,19 +323,20 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
   var programReproducingError = match != null ? match[1] : "";
   var hasMain = programReproducingError.match(/method\s+Main\s*\(/);
 
-  var type = await(question(`Do you want to reproduce this problem\n- On the command line (${isLanguageServer ? "" : "ENTER or "}1)\n- On the language server(${isLanguageServer ? "ENTER or " : ""}2)\n- Don't create test files(3)?\n> `));
-  var languageServer = (isLanguageServer && type == "") || type == "2";
-  var skipTestCreation = type == "3";
+  var type = await(question(`Do you want to reproduce this problem\n- On the command line (${isLanguageServer ? "" : "ENTER or "}1)\n- A diagnostic test on the language server(${isLanguageServer ? "ENTER or " : ""}2)\n- A gutter icons test on the language server (3)\n- Don't create test files(4)?\n> `));
+  var languageServerDiagnostic = (isLanguageServer && type == "") || type == "2";
+  var languageServerIcons = type == "3";
+  var skipTestCreation = type == "4";
   if(skipTestCreation) {
-    return {programReproducingError, languageServer, skipTestCreation};
+    return {programReproducingError, languageServerDiagnostic, skipTestCreation};
   }
-  var shouldCompile = !languageServer && ok(await question("Will the test need to be compiled? "+ACCEPT_HINT));
+  var shouldCompile = !languageServerDiagnostic && !languageServerIcons && ok(await question("Will the test need to be compiled? "+ACCEPT_HINT));
   var shouldRun = shouldCompile && (hasMain || ok(await question("Will the test need to be run (i.e. will have a Main() method)? "+ACCEPT_HINT)));
   var shouldCompileBackend = shouldCompile ? await filterQuestion("Which back-end should be used? cs (default), js, java, go, cpp, py or all? ", ["", "cs", "js", "java", "go", "cpp", "py", "all"]) : "";
 
   programReproducingError = programReproducingError == "" ? (commandLineContent ?? (shouldRun ? "method Main() {\n  \n}" : "")) : programReproducingError;
-  if(languageServer) {
-    return {programReproducingError, languageServer, skipTestCreation};
+  if(languageServerDiagnostic || languageServerIcons) {
+    return {programReproducingError, languageServerDiagnostic, languageServerIcons, skipTestCreation};
   }
   var header = "";
   var programArguments = "";
@@ -361,7 +364,7 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
   }
   header += `// RUN: %diff "%s.expect" "%t"\n\n`;
   programReproducingError = header + programReproducingError;
-  return {programReproducingError, languageServer, skipTestCreation};
+  return {programReproducingError, languageServerDiagnostic, languageServerIcons, skipTestCreation};
 }
 
 // Reads an existing test and extract the last dafny command to run
@@ -431,39 +434,34 @@ function openAndYield(cmd) {
 }
 
 // Creates the branch for the given issue number, and add all the provided test files to it.
-async function createBranchAndAddTestFiles(testInfo, testInfoLS, branchName, skipTestCreation) {
+async function createBranchAndAddTestFiles(testManagers, branchName, skipTestCreation) {
   await execLog(`git checkout -b ${branchName}`, `Creating branch ${branchName}...`);
   if(!skipTestCreation) {
-    await testInfo.addToGit();
-    await testInfoLS.addToGit();
+    for(let testManager of testManagers) {
+       await testManager.addToGit();
+    }
   }
-  await execLog(`git commit -m "Add test for issue #${testInfo.issueNumber}"`, "Committing files...");
+  await execLog(`git commit -m "Add test for issue #${testManagers[0].issueNumber}"`, "Committing files...");
 }
 
 // Verify if the tests of the given branch pass
-async function verifyFix(testInfo, testInfoLS) {
+async function verifyFix(testManagers) {
   var testResult = "";
-  if(await testInfo.exists()) {
-    var testCmd = await testInfo.xunitTestCmd();
-    console.log("Running:"+testCmd);
-    var integrationTestResults = await execLog(testCmd, "\nCompiling and verifying the fix for integration tests... (looping forever means bug)", false);
-    integrationTestResults = integrationTestResults.stdout + integrationTestResults.stderr;
-    var integrationTestVerified = integrationTestResults.match(/Failed:\s*0\s*,\s*Passed:\s*(?!0)/);
-    testResult += integrationTestResults;
-  } else {
-    var integrationTestVerified = true;
+  var verified = true;
+  var testManagerVerified = false;
+  for(let testManager of testManagers) {
+    if(await testManager.exists()) {
+      var testCmd = await testManager.xunitTestCmd();
+      console.log("Running:"+testCmd);
+      var testManagerResults = await execLog(testCmd, "\nCompiling and verifying the fix for "+testManager.type+"... (looping forever means bug)", false);
+      testManagerResults = testManagerResults.stdout + testManagerResults.stderr;
+      testManagerVerified = testManagerResults.match(/Failed:\s*0\s*,\s*Passed:\s*(?!0)/);
+      testResult += testManagerResults;
+    } else {
+      testManagerVerified = true;
+    }
+    verified = verified && testManagerVerified;
   }
-  if(await testInfoLS.exists()) {
-    var testCmd = await testInfoLS.xunitTestCmd();
-    console.log("Running:"+testCmd);
-    var languageServerTestResult = await execLog(testCmd, "\nCompiling and verifying the fix for the language server... (looping forever means bug)", false);
-    languageServerTestResult = languageServerTestResult.stdout + languageServerTestResult.stderr;
-    var languageServerTestVerified = languageServerTestResult.match(/Failed:\s*0\s*,\s*Passed:\s*(?!0)/);
-    testResult += languageServerTestResult;
-  } else {
-    var languageServerTestVerified = true;
-  }
-  var verified = integrationTestVerified && languageServerTestVerified;
   return {ok: verified, log: testResult};
 }
 
@@ -527,7 +525,7 @@ async function commitAllAndPush(testInfo, commitMessage, branchName, testsNowExi
   await execLog(`git push origin --set-upstream ${branchName}`, "Pushing the fix to GitHub...");
 }
 
-// A test manager either considers
+// A test testManager either considers
 // - A pair of git-issues/git-issue-<issuenumber>.dfy and its expect file
 // - A simple [TestMethod] in DiagnosticsTest.cs and its assertions.
 
@@ -622,20 +620,53 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
   };
 }
 
+function getLanguageServerDiagnosticTestManager(issueNumber, issueKeyword, name = "") {
+  const testTemplate = (methodName, content) => `[TestMethod]
+    public async Task ${methodName}() {
+      var source = @"
+${content.replace(/"/g,"\"\"")}".TrimStart();
+      var documentItem = CreateTestDocument(source);
+      await client.OpenDocumentAndWaitAsync(documentItem, CancellationToken);
+      // Uncomment what you need.
+      // var diagnostics = await GetLastDiagnostics(documentItem, CancellationToken);
+      // Assert.AreEqual(1, diagnostics.Length);
+      // ApplyChange(ref documentItem, ((0, 0), (3, 0)), "insert text");
+      // diagnostics = await GetLastDiagnostics(documentItem, CancellationToken); // If expect no parsing error
+      // diagnostics = await diagnosticsReceiver.AwaitNextDiagnosticsAsync(CancellationToken); // If expect parsing errors
+      // Assert.AreEqual(0, diagnostics.Length);
+      
+      await AssertNoDiagnosticsAreComing(CancellationToken);
+    }
+    
+    `;
+  return getLanguageServerManager("Synchronization/DiagnosticsTest.cs", testTemplate, issueNumber, issueKeyword, name);
+}
 
-function getLanguageServerTestManager(issueNumber, issueKeyword, name = "") {
+function getLanguageServerGutterIconsManager(issueNumber, issueKeyword, name = "") {
+  const testTemplate = (methodName, content) => `[TestMethod]
+  public async Task ${methodName}() {
+    await VerifyTrace(@"
+${content.replace(/"/g,"\"\"")}", intermediates: false);
+  }
+ 
+  `;
+  return getLanguageServerManager("GutterStatus/SimpleLinearVerificationGutterStatusTester.cs", testTemplate, issueNumber, issueKeyword, name);
+}
+
+
+function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyword, name = "") {
   if(name == "") {
-    name = issueKeyword.replace(/^\w|-(\w)/g, match => match.length == 1 ? match.toUpperCase() : match[1].toUpperCase());
+    name = issueKeyword.replace(/^\w|-+(\w)/g, match => match.length == 1 ? match.toUpperCase() : match[1].toUpperCase());
   }
   return {
-    type: "language-server",
-    shortName: `Test marked '// git-issue-${issueNumber}' in DafnyLanguageServer.Test/Synchronization/DiagnosticsTest.cs`,
+    type: "language-server at "+fileName,
+    shortName: `Test named 'GitIssue${issueNumber}${name}' in DafnyLanguageServer.Test/${fileName}`,
     issueNumber: issueNumber,
     issueKeyword: issueKeyword,
     testMethodName: "GitIssue"+issueNumber,
-    testFile: `Source/DafnyLanguageServer.Test/Synchronization/DiagnosticsTest.cs`,
+    testFile: `Source/DafnyLanguageServer.Test/${fileName}`,
     testFileContent: null,
-    regex: /\[TestMethod\]\s*public\s+async\s+Task\s*(GitIssue(\d+)\w+)\(\)\s*\{/g,
+    regex: /public\s+async\s+Task\s*(GitIssue(\d+)\w+)\(\)\s*\{/g,
     existingTests: null,
     name: name,
     async recoverData() {
@@ -685,25 +716,7 @@ function getLanguageServerTestManager(issueNumber, issueKeyword, name = "") {
         }
         this.MethodName = "GitIssue" + this.issueNumber + this.name + suffix[indexSuffix];
       }
-      var newTestFileContent = this.testFileContent.substring(0, i) +
-      `[TestMethod]
-    public async Task ${this.MethodName}() {
-      var source = @"
-${content.replace(/"/g,"\"\"")}".TrimStart();
-      var documentItem = CreateTestDocument(source);
-      await client.OpenDocumentAndWaitAsync(documentItem, CancellationToken);
-      // Uncomment what you need.
-      // var diagnostics = await GetLastDiagnostics(documentItem, CancellationToken);
-      // Assert.AreEqual(1, diagnostics.Length);
-      // ApplyChange(ref documentItem, ((0, 0), (3, 0)), "insert text");
-      // diagnostics = await GetLastDiagnostics(documentItem, CancellationToken); // If expect no parsing error
-      // diagnostics = await diagnosticsReceiver.AwaitNextDiagnosticsAsync(CancellationToken); // If expect parsing errors
-      // Assert.AreEqual(0, diagnostics.Length);
-      
-      await AssertNoDiagnosticsAreComing(CancellationToken);
-    }
-    
-    `+this.testFileContent.substring(i);
+      var newTestFileContent = this.testFileContent.substring(0, i) + testTemplate(this.MethodName, content)+this.testFileContent.substring(i);
 
       console.log(`Going to add test ${this.MethodName} in ${this.testFile}...`);
       await fs.promises.writeFile(this.testFile, newTestFileContent);
@@ -732,7 +745,7 @@ ${content.replace(/"/g,"\"\"")}".TrimStart();
       return [ this.testFile ];
     },
     async addToGit() {
-      await addAll(this.patternsToAddToGit(), "the language server test files");
+      await addAll(this.patternsToAddToGit(), fileName);
     },
     async xunitTestCmd() {
       return `dotnet test --nologo Source/DafnyLanguageServer.Test --filter Name~${this.rawMethodName()}`;
@@ -770,24 +783,27 @@ async function doAddExistingIntegrationTest(testName) {
   }
 }
 // Process `fix more` with the given detected issueNumber, and moreText is the argument after "more".
-async function doAddExistingOrNewTest(testInfo, testInfoLs, moreText) {
+async function doAddExistingOrNewTest(testInfo, testInfoLSDiagnostic, testInfoLSIcons, moreText) {
   var otherIssueNumber = moreText || await question("Please enter either\n-Another existing issue number from which to import tests\n-The name of an existing integration test\n-Blank if you want to create a new test manually\n");
   if(otherIssueNumber != "" && !otherIssueNumber.match(/^\d+$/)) {
     console.log("The issue number seems to be an existing integration test case. Adding them to this branches' tests...");
     return await doAddExistingIntegrationTest(otherIssueNumber);
   }
   
-  var {programReproducingError, languageServer, skipTestCreation} =
+  var {programReproducingError, languageServerDiagnostic, languageServerIcons, skipTestCreation} =
     await interactivelyCreateTestFileContent(otherIssueNumber);
   if(skipTestCreation) {
     throw ABORTED;
   }
-  if(languageServer) {
+  if(languageServerDiagnostic) {
+    testInfoLSDiagnostic.create(programReproducingError);
+    testInfoLSDiagnostic.openAndYield();
+  } else if(languageServerIcons) {
+    testInfoLSIcons.create(programReproducingError);
+    testInfoLSIcons.openAndYield();
+  } else {
     testInfo.create(programReproducingError);
     testInfo.openAndYield();
-  } else {
-    testInfoLS.create(programReproducingError);
-    testInfoLS.openAndYield();
   }
 }
 
@@ -799,7 +815,8 @@ async function Main() {
   var {openFiles, skipVerification, addOneTestCase, args} = processArgs();
   var fixBranchDidExist = false;
   var testFileContent = "";
-  var languageServer = false; // TODO
+  var languageServerDiagnostic = false;
+  var languageServerIcons = false;
   var skipTestCreation = false;
   var providedIssueNumber = args[2];
   var providedKeywordNumber = args[3];
@@ -816,17 +833,22 @@ async function Main() {
     // We first detect if tests related to the branch exist. If not such file exist, then
 
     var testInfo = getIntegrationTestManager(issueNumber, issueKeyword);
-    var testInfoLS = getLanguageServerTestManager(issueNumber, issueKeyword);
-    var integrationTestsDidExist = await testInfo.exists();
-    var languageServerTestsDidExist = await testInfoLS.exists();
-    var testFilesDidExist = integrationTestsDidExist || languageServerTestsDidExist;
+    var testInfoLSDiagnostic = getLanguageServerDiagnosticTestManager(issueNumber, issueKeyword);
+    var testInfoLSIcons = getLanguageServerGutterIconsManager(issueNumber, issueKeyword);
+    var testManagers = [testInfo, testInfoLSDiagnostic, testInfoLSIcons];
+    var testFilesDidExist = addOneTestCase;
+    for(let i = 0; i < testManagers.length; i++) {
+      testFilesDidExist = testFilesDidExist || await testManagers[i].exists();
+    }
     if(!testFilesDidExist) {
       addOneTestCase = false; // This will be automatic
-      var {programReproducingError: testFileContent, languageServer, skipTestCreation} =
+      var {programReproducingError: testFileContent, languageServerDiagnostic, languageServerIcons, skipTestCreation} =
         await interactivelyCreateTestFileContent(issueNumber, providedContent);
       if(!skipTestCreation) {
-        if(languageServer) {
-          await testInfoLS.create(testFileContent);
+        if(languageServerDiagnostic) {
+          await testInfoLSDiagnostic.create(testFileContent);
+        } else if(languageServerIcons) {
+          await testInfoLSIcons.create(testFileContent);
         } else {
           await testInfo.create(testFileContent);
         }
@@ -834,15 +856,14 @@ async function Main() {
     }
     var testsNowExist = testFilesDidExist || !skipTestCreation;
     if(addOneTestCase) {
-      await doAddExistingOrNewTest(testInfo, testInfoLs, providedIssueNumber);
+      await doAddExistingOrNewTest(testInfo, testInfoLSDiagnostic, testInfoLSIcons, providedIssueNumber);
     }
 
     if(!skipTestCreation && (!fixBranchDidExist || openFiles || neededToSwitchToExistingBranch)) {
-      if(await testInfo.exists()) {
-        testInfo.openAndYield();
-      }
-      if(await testInfoLS.exists()) {
-        testInfoLS.openAndYield();
+      for(let testManager of testManagers) {
+        if(await testManager.exists()) {
+          testManager.openAndYield();
+        }
       }
     }
     if(neededToSwitchToExistingBranch) { // We opened the files previously, but we rebuild the solution afterwards. Is that ok?
@@ -850,14 +871,13 @@ async function Main() {
     }
 
     if(!fixBranchDidExist) {
-      await createBranchAndAddTestFiles(testInfo, testInfoLS, branchName, skipTestCreation);
+      await createBranchAndAddTestFiles(testManagers, branchName, skipTestCreation);
     }
     if(testsNowExist) {
-      if(await testInfo.exists()) {
-        await testInfo.displayRunHelp();
-      }
-      if(await testInfoLS.exists()) {
-        await testInfoLS.displayRunHelp();
+      for(let testManager of testManagers) {
+        if(await testManager.exists()) {
+          await testManager.displayRunHelp();
+        }
       }
     }
     if((!fixBranchDidExist || !testFilesDidExist || openFiles) &&
@@ -867,7 +887,7 @@ async function Main() {
       console.log(`When the tests succeed, re-run this script to verify the fix and create the PR.\nYou can run the same command-line${withoutOpen}.`);
     } else {
       var testResult = {};
-      if(skipVerification || ((testResult = await verifyFix(testInfo, testInfoLS), testResult.ok)) && !neededToSwitchToExistingBranch) {
+      if(skipVerification || ((testResult = await verifyFix(testManagers), testResult.ok)) && !neededToSwitchToExistingBranch) {
         var wasPushed = await originAlreadyExists(branchName);
         if(skipVerification) {
           console.log(`You indicated "force", so you assume that this commit solves the issue #${issueNumber}.`);
@@ -902,11 +922,10 @@ async function Main() {
         } else {
           console.log(testResult.log);
           console.log("The test did not pass. Please fix the issue and re-run this script after ensuring that the following command-line succeeds:\n");
-          if(await testInfo.exists()) {
-            testInfo.displayXunitTestCmd();
-          }
-          if(await testInfoLS.exists()) {
-            testInfoLS.displayXunitTestCmd();
+          for(let testManager of testManagers) {
+            if(await testManager.exists()) {
+              testManager.displayXunitTestCmd();
+            }
           }
           await helpIfDllLock(testResult.log);
         }
