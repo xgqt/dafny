@@ -346,20 +346,21 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
     }
     var c = shouldRun ? "build" : "run";
     if(shouldCompileBackend == "all") {
-      header += `// RUN: %baredafny verify %args_0 "%s" > "%t"\n`;
-      header += `// RUN: %baredafny ${c} %args_0 --no-verify -t:cs "%s" >> "%t"\n`;
-      header += `// RUN: %baredafny ${c} %args_0 --no-verify -t:js "%s" >> "%t"\n`;
-      header += `// RUN: %baredafny ${c} %args_0 --no-verify -t:cpp "%s" >> "%t"\n`;
-      header += `// RUN: %baredafny ${c} %args_0 --no-verify -t:java "%s" >> "%t"\n`;
-      header += `// RUN: %baredafny ${c} %args_0 --no-verify -t:go "%s" >> "%t"\n`;
-      header += `// RUN: %baredafny ${c} %args_0 --no-verify -t:py "%s" >> "%t"\n`;
+      header += `// RUN: %baredafny verify %args "%s" > "%t"\n`;
+      header += `// RUN: %baredafny ${c} %args --no-verify -t:cs "%s" >> "%t"\n`;
+      header += `// RUN: %baredafny ${c} %args --no-verify -t:js "%s" >> "%t"\n`;
+      header += `// RUN: %baredafny ${c} %args --no-verify -t:cpp "%s" >> "%t"\n`;
+      header += `// RUN: %baredafny ${c} %args --no-verify -t:java "%s" >> "%t"\n`;
+      header += `// RUN: %baredafny ${c} %args --no-verify -t:go "%s" >> "%t"\n`;
+      header += `// RUN: %baredafny ${c} %args --no-verify -t:py "%s" >> "%t"\n`;
       programArguments = `${c} -t:cs`;
     } else {
-      programArguments = `${c} %args_0 -t:${shouldCompileBackend}`;
+      programArguments = `${c} %args -t:${shouldCompileBackend}`;
       header += `// RUN: %baredafny ${programArguments} "%s" > "%t"\n`;
     }
   } else {
-    header = `// RUN: %baredafny verify %args_0 "%s" > "%t"\n`;
+    var shouldVerify = ok(await question("Will the test eventually pass verification? "+ACCEPT_HINT));
+    header = `// RUN: ${(shouldVerify ? "" : "%exits-with 1 ")}%baredafny verify %args "%s" > "%t"\n`;
     programArguments = "verify";
   }
   header += `// RUN: %diff "%s.expect" "%t"\n\n`;
