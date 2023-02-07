@@ -387,9 +387,11 @@ async function getTestArguments(testFile) {
 }
 
 // Creates the two test files
-async function createTestFilesAndExpect(testFile, testFileExpect, testFileContent) {
+async function createTestFilesAndExpect(testFile, testFileExpect, testFileContent, executionSucceeds = true) {
   await fs.promises.writeFile(testFile, testFileContent);
-  await fs.promises.writeFile(testFileExpect, "");
+  await fs.promises.writeFile(testFileExpect, executionSucceeds ? `
+Dafny program verifier finished with TODO verified, TODO errors
+` : "");
 }
 
 // Provides help if DafnyCore.dll cannot be overwritten
