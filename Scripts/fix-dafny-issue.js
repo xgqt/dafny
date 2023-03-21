@@ -360,7 +360,7 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
     }
   } else {
     var shouldVerify = ok(await question("Will the test eventually pass verification? "+ACCEPT_HINT));
-    header = `// RUN: ${(shouldVerify ? "" : "%exits-with 1 ")}%baredafny verify %args "%s" > "%t"\n`;
+    header = `// RUN: ${(shouldVerify ? "" : "%exits-with 4 ")}%baredafny verify %args "%s" > "%t"\n`;
     programArguments = "verify";
   }
   header += `// RUN: %diff "%s.expect" "%t"\n\n`;
