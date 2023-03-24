@@ -71,6 +71,14 @@ if(process.cwd().endsWith("scripts")) {
   process.chdir("..");
 }
 
+const TEST_TYPE = {
+  SKIP_TEST_CREATION: 0,
+  INTEGRATION: 1,
+  LANGUAGE_SERVER: 2,
+  LANGUAGE_SERVER_ICONS: 3,
+  FORMATTER: 4
+}
+
 const ABORTED = "ABORTED";
 const ACCEPT_HINT = "(ENTER or y for yes, n for no, CTRL+C to abort)\n> ";
 const { exit } = require('process');
@@ -310,33 +318,54 @@ async function getIssueKeyword(issueNumber) {
   return issueKeyword;
 }
 
-// Create the tests fore the given issue number
-async function interactivelyCreateTestFileContent(issueNumber = null, commandLineContent = null) {
-  // Retrieve the content of the first post from the issue
-  var js = issueNumber != null && issueNumber != "" ? await getOriginalDafnyIssue(issueNumber) : {};
-  var isLanguageServer = "labels" in js && js.labels.find(label => 
-    label.name.indexOf("language server") >= 0);
+
+function hasLabel(js, labelName) {
+  return "labels" in js && js.labels.find(label => 
+    label.name.indexOf(labelName) >= 0);
+}
+
+function extractProgram(js) {
   // Get the body field of the first post
   var issueContent = "body" in js ? js.body : "";
   // extract the code contained between ```dafny and ```
   var match = issueContent.match(/```(?:.*dafny)?\r?\n([\s\S]+?)\r?\n```/);
   var programReproducingError = match != null ? match[1] : "";
-  var hasMain = programReproducingError.match(/method\s+Main\s*\(/);
+  return programReproducingError;
+}
 
-  var type = await(question(`Do you want to reproduce this problem\n- On the command line (${isLanguageServer ? "" : "ENTER or "}1)\n- A diagnostic test on the language server(${isLanguageServer ? "ENTER or " : ""}2)\n- A gutter icons test on the language server (3)\n- Don't create test files(4)?\n> `));
-  var languageServerDiagnostic = (isLanguageServer && type == "") || type == "2";
-  var languageServerIcons = type == "3";
-  var skipTestCreation = type == "4";
-  if(skipTestCreation) {
-    return {programReproducingError, languageServerDiagnostic, skipTestCreation};
+// Create the tests fore the given issue number
+async function interactivelyCreateTestFileContent(issueNumber = null, commandLineContent = null) {
+  // Retrieve the content of the first post from the issue
+  var js = issueNumber != null && issueNumber != "" ? await getOriginalDafnyIssue(issueNumber) : {};
+  
+  var hasLanguageServerLabel = hasLabel(js, "language-server");
+  var hasFormatterLabel = hasLabel(js, "formatter");
+  var programReproducingError = extractProgram(js);
+  var hasMain = programReproducingError.match(/method\s+Main\s*\(/);
+  var isDefault = !hasLanguageServerLabel && !hasFormatterLabel;
+  var type = await(question(`Do you want to reproduce this problem\n- On the command line (${isDefault ? "ENTER or " : ""}1)\n`+
+      `- A diagnostic test on the language server(${hasLanguageServerLabel ? "ENTER or " : ""}2)\n`+
+      `- A formatter test (${hasFormatterLabel ? "ENTER or " : ""}3)\n`+
+      `- A gutter icons test on the language server (4)\n`+
+      `- Don't create test files(5)?\n> `));
+  var test_type =
+  (hasLanguageServerLabel && type == "") || type == "2" ? TEST_TYPE.LANGUAGE_SERVER :
+      (hasFormatterLabel && type == "") || type == "3" ? TEST_TYPE.FORMATTER :
+        (type == "4" ? TEST_TYPE.LANGUAGE_SERVER_ICONS :
+          (type == "5" ? TEST_TYPE.SKIP_TEST_CREATION :
+            TEST_TYPE.INTEGRATION));
+  if(test_type == TEST_TYPE.SKIP_TEST_CREATION) {
+    return {programReproducingError, test_type};
   }
-  var shouldCompile = !languageServerDiagnostic && !languageServerIcons && ok(await question("Will the test need to be compiled? "+ACCEPT_HINT));
+  var shouldCompile = test_type == TEST_TYPE.INTEGRATION && ok(await question("Will the test need to be compiled? "+ACCEPT_HINT));
   var shouldRun = shouldCompile && (hasMain || ok(await question("Will the test need to be run (i.e. will have a Main() method)? "+ACCEPT_HINT)));
   var shouldCompileBackend = shouldCompile ? await filterQuestion("Which back-end should be used? cs (default), js, java, go, cpp, py or all? ", ["", "cs", "js", "java", "go", "cpp", "py", "all"]) : "";
 
-  programReproducingError = programReproducingError == "" ? (commandLineContent ?? (shouldRun ? "method Main() {\n  \n}" : "")) : programReproducingError;
-  if(languageServerDiagnostic || languageServerIcons) {
-    return {programReproducingError, languageServerDiagnostic, languageServerIcons, skipTestCreation};
+  programReproducingError = programReproducingError == "" ?
+    (commandLineContent ?? (
+      shouldRun ? "method Main() {\n  \n}" : "")) : programReproducingError;
+  if(test_type != TEST_TYPE.INTEGRATION) {
+    return {programReproducingError, test_type};
   }
   var header = "";
   var programArguments = "";
@@ -365,7 +394,7 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
   }
   header += `// RUN: %diff "%s.expect" "%t"\n\n`;
   programReproducingError = header + programReproducingError;
-  return {programReproducingError, languageServerDiagnostic, languageServerIcons, skipTestCreation};
+  return {programReproducingError, test_type};
 }
 
 // Reads an existing test and extract the last dafny command to run
@@ -440,11 +469,12 @@ function openAndYield(cmd) {
 async function createBranchAndAddTestFiles(testManagers, branchName, skipTestCreation) {
   await execLog(`git checkout -b ${branchName}`, `Creating branch ${branchName}...`);
   if(!skipTestCreation) {
-    for(let testManager of testManagers) {
+    for(let k in testManagers) {
+      var testManager = testManagers[k];
        await testManager.addToGit();
     }
   }
-  await execLog(`git commit -m "Add test for issue #${testManagers[0].issueNumber}"`, "Committing files...");
+  await execLog(`git commit -m "Add test for issue #${testManagers[TEST_TYPE.INTEGRATION].issueNumber}"`, "Committing files...");
 }
 
 // Verify if the tests of the given branch pass
@@ -452,7 +482,8 @@ async function verifyFix(testManagers) {
   var testResult = "";
   var verified = true;
   var testManagerVerified = false;
-  for(let testManager of testManagers) {
+  for(let k in testManagers) {
+    var testManager = testManages[k];
     if(await testManager.exists()) {
       var testCmd = await testManager.xunitTestCmd();
       console.log("Running:"+testCmd);
@@ -580,7 +611,7 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
       var testFile = this.name;
       console.log("-------------------------------------------------------------");
       console.log("| Ensure you put the path of the language server for VSCode:|");
-      console.log(`Dafny: Language Server Runtime Path:\n${process.cwd()}/Binaries/DafnyLanguageServer.dll`);
+      console.log(`Dafny: Language Server Runtime Path:\n${process.cwd()}/Binaries/Dafny.exe`);
       console.log("-------------------------------------------------------------");
       console.log("| Run the test as part of the XUnit test:                   |");
       this.displayXunitTestCmd();
@@ -656,17 +687,19 @@ ${content.replace(/"/g,"\"\"")}", intermediates: false);
   return getLanguageServerManager("GutterStatus/SimpleLinearVerificationGutterStatusTester.cs", testTemplate, issueNumber, issueKeyword, name);
 }
 
+function DashToCamlCase(name) {
+  return name.replace(/^\w|-+(\w)/g, match => match.length == 1 ? match.toUpperCase() : match[1].toUpperCase());
+}
 
 function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyword, name = "") {
   if(name == "") {
-    name = issueKeyword.replace(/^\w|-+(\w)/g, match => match.length == 1 ? match.toUpperCase() : match[1].toUpperCase());
+    name = DashToCamlCase(issueKeyword);
   }
   return {
     type: "language-server at "+fileName,
     shortName: `Test named 'GitIssue${issueNumber}${name}' in DafnyLanguageServer.Test/${fileName}`,
     issueNumber: issueNumber,
     issueKeyword: issueKeyword,
-    testMethodName: "GitIssue"+issueNumber,
     testFile: `Source/DafnyLanguageServer.Test/${fileName}`,
     testFileContent: null,
     regex: /public\s+async\s+Task\s*(GitIssue(\d+)\w+)\(\)\s*\{/g,
@@ -708,16 +741,7 @@ function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyw
       var i = firstTestMatch.index;
       this.MethodName = "GitIssue" + this.issueNumber + this.name;
       if(this.testFileContent.indexOf(this.MethodName) >= 0) {
-        var suffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        var indexSuffix = 0;
-        while(indexSuffix < suffix.length && this.testFileContent.indexOf("GitIssue" + this.issueNumber + this.name + suffix[indexSuffix]) >= 0) {
-          indexSuffix++;
-        }
-        if(indexSuffix >= suffix.length) {
-          console.log("Too many DafnyLanguageServer test files prefixed by "+MethodName);
-          throw ABORTED;
-        }
-        this.MethodName = "GitIssue" + this.issueNumber + this.name + suffix[indexSuffix];
+        this.MethodName = FindAppropriateSuffix(this.testFileContent, "GitIssue" + this.issueNumber + this.Name)
       }
       var newTestFileContent = this.testFileContent.substring(0, i) + testTemplate(this.MethodName, content)+this.testFileContent.substring(i);
 
@@ -735,7 +759,7 @@ function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyw
       await this.recoverData();
       console.log("-------------------------------------------------------------");
       console.log("| Ensure you put the path of the language server for VSCode:|");
-      console.log(`Dafny: Language Server Runtime Path:\n${process.cwd()}/Binaries/DafnyLanguageServer.dll`);
+      console.log(`Dafny: Language Server Runtime Path:\n${process.cwd()}/Binaries/Dafny.exe`);
       console.log("-------------------------------------------------------------");
       console.log("| Run the test as part of the XUnit test:                   |");
       this.displayXunitTestCmd()
@@ -754,6 +778,117 @@ function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyw
       return `dotnet test --nologo Source/DafnyLanguageServer.Test --filter Name~${this.rawMethodName()}`;
     }
   };
+}
+
+function getFormatterManager(issueNumber, issueKeyword, name = "") {
+  if(name == "") {
+    name = DashToCamlCase(issueKeyword);
+  }
+  var fileName = "FormatterIssues.cs";
+  const testTemplate = (methodName, content) => `[Fact]
+    public void ${methodName}() {
+      FormatterWorksFor(@"
+${content.replace(/"/g,"\"\"")}");
+    }
+    
+    `;
+  return {
+    type: "formatter",
+    shortName: `Test named 'GitIssue${issueNumber}${name}' in DafnyPipeline.Test/${fileName}`,
+    issueNumber: issueNumber,
+    issueKeyword: issueKeyword,
+    testFile: `Source/DafnyPipeline.Test/${fileName}`,
+    testFileContent: null,
+    regex: /public\s+void\s+(GitIssue(\d+)\w+)\(\)\s*\{/g,
+    existingTests: null,
+    name: name,
+    async recoverData() {
+      if(!this.testFileContent) {
+        this.testFileContent = await fs.promises.readFile(this.testFile, "utf-8");
+      }
+      if(!this.testFileContent) {
+        console.log("Could not find " + this.testFile);
+      }
+      if(this.existingTests == null) {
+        this.existingTests = [];
+        this.regex.lastIndex = 0;
+        while(match = this.regex.exec(this.testFileContent)) {
+          if(match[2] == issueNumber + "") {
+            this.existingTests.push(match[1]);
+          }
+        }
+      }
+      this.MethodName = this.existingTests[0]; // Might be null
+      this.MethodName = this.rawMethodName();
+    },
+    rawMethodName() {
+      return this.MethodName != null ? this.MethodName.replace(/[A-Z]$/, "") : null;
+    },
+    async exists() {
+      await this.recoverData();
+      return this.existingTests.length > 0;
+    },
+    async create(content) {
+      await this.recoverData();
+      var firstTestMatch = /\[Fact\]/.exec(this.testFileContent);
+      if(!firstTestMatch) {
+        console.log(`Could not find [Fact] in ${this.testFile}`);
+        throw ABORTED;
+      }
+      var i = firstTestMatch.index;
+      this.MethodName = "GitIssue" + this.issueNumber + this.name;
+      if(this.testFileContent.indexOf(this.MethodName) >= 0) {
+        this.MethodName = FindAppropriateSuffix(this.testFileContent, this.MethodName);
+      }
+      var newTestFileContent = this.testFileContent.substring(0, i) +
+        testTemplate(this.MethodName, content)+this.testFileContent.substring(i);
+
+      console.log(`Going to add test ${this.MethodName} in ${this.testFile}...`);
+      await fs.promises.writeFile(this.testFile, newTestFileContent);
+    },
+    openAndYield() {
+      openAndYield(this.testFile);
+      console.log("Look for "+this.MethodName+"! It should be the first test.");
+    },
+    async displayXunitTestCmd() {
+      console.log((await this.xunitTestCmd()).replace(/Test --filter/g, "Test \\\n--filter").replace(/\|/g, "|\\\n"));
+    },
+    async displayRunHelp() {
+      await this.recoverData();
+      console.log("-------------------------------------------------------------");
+      console.log("| Ensure you put the path of the language server for VSCode:|");
+      console.log(`Dafny: Language Server Runtime Path:\n${process.cwd()}/Binaries/Dafny.exe`);
+      console.log("-------------------------------------------------------------");
+      console.log("| Run the test as part of the XUnit test:                   |");
+      this.displayXunitTestCmd()
+      console.log("-------------------------------------------------------------");
+      console.log("| Run the test in Rider:                                    |");
+      console.log(this.MethodName);
+      console.log("-------------------------------------------------------------");
+    },
+    patternsToAddToGit() {
+      return [ this.testFile ];
+    },
+    async addToGit() {
+      await addAll(this.patternsToAddToGit(), fileName);
+    },
+    async xunitTestCmd() {
+      return `dotnet test --nologo Source/DafnyPipeline.Test --filter ${this.rawMethodName()}`;
+    }
+  };
+}
+
+function FindAppropriateSuffix(fileContent, baseName) {
+  var suffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  var indexSuffix = 0;
+  while(indexSuffix < suffix.length && fileContent.indexOf(baseName + suffix[indexSuffix]) >= 0) {
+    indexSuffix++;
+  }
+  if(indexSuffix >= suffix.length) {
+    console.log("Too many test files prefixed by "+baseName);
+    throw ABORTED;
+  }
+  return baseName + suffix[indexSuffix];
 }
 
 function getIntegrationTestFileName(issueNumber, suffix = "") {
@@ -786,28 +921,20 @@ async function doAddExistingIntegrationTest(testName) {
   }
 }
 // Process `fix more` with the given detected issueNumber, and moreText is the argument after "more".
-async function doAddExistingOrNewTest(testInfo, testInfoLSDiagnostic, testInfoLSIcons, moreText) {
+async function doAddExistingOrNewTest(testManagers, moreText) {
   var otherIssueNumber = moreText || await question("Please enter either\n-Another existing issue number from which to import tests\n-The name of an existing integration test\n-Blank if you want to create a new test manually\n");
   if(otherIssueNumber != "" && !otherIssueNumber.match(/^\d+$/)) {
     console.log("The issue number seems to be an existing integration test case. Adding them to this branches' tests...");
     return await doAddExistingIntegrationTest(otherIssueNumber);
   }
   
-  var {programReproducingError, languageServerDiagnostic, languageServerIcons, skipTestCreation} =
+  var {programReproducingError, test_type} =
     await interactivelyCreateTestFileContent(otherIssueNumber);
-  if(skipTestCreation) {
+  if(test_type == TEST_TYPE.SKIP_TEST_CREATION) {
     throw ABORTED;
   }
-  if(languageServerDiagnostic) {
-    testInfoLSDiagnostic.create(programReproducingError);
-    testInfoLSDiagnostic.openAndYield();
-  } else if(languageServerIcons) {
-    testInfoLSIcons.create(programReproducingError);
-    testInfoLSIcons.openAndYield();
-  } else {
-    testInfo.create(programReproducingError);
-    testInfo.openAndYield();
-  }
+  testManagers[test_type].create(programReproducingError);
+  testManagers[test_type].openAndYield();
 }
 
 // We will want to run tests on the language server at some point
@@ -818,9 +945,6 @@ async function Main() {
   var {openFiles, skipVerification, addOneTestCase, args} = processArgs();
   var fixBranchDidExist = false;
   var testFileContent = "";
-  var languageServerDiagnostic = false;
-  var languageServerIcons = false;
-  var skipTestCreation = false;
   var providedIssueNumber = args[2];
   var providedKeywordNumber = args[3];
   var providedContent = args[4]; // Should deprecate. No one is ever going to add a test content as an argument of the command line.
@@ -838,32 +962,33 @@ async function Main() {
     var testInfo = getIntegrationTestManager(issueNumber, issueKeyword);
     var testInfoLSDiagnostic = getLanguageServerDiagnosticTestManager(issueNumber, issueKeyword);
     var testInfoLSIcons = getLanguageServerGutterIconsManager(issueNumber, issueKeyword);
-    var testManagers = [testInfo, testInfoLSDiagnostic, testInfoLSIcons];
+    var testInfoFormatter = getFormatterManager(issueNumber, issueKeyword);
+    var testManagers = {
+      [TEST_TYPE.INTEGRATION] : testInfo,
+      [TEST_TYPE.LANGUAGE_SERVER] : testInfoLSDiagnostic,
+      [TEST_TYPE.LANGUAGE_SERVER_ICONS] : testInfoLSIcons,
+      [TEST_TYPE.FORMATTER] : testInfoFormatter
+    };
     var testFilesDidExist = addOneTestCase;
-    for(let i = 0; i < testManagers.length; i++) {
+    for(let i in testManagers) {
       testFilesDidExist = testFilesDidExist || await testManagers[i].exists();
     }
     if(!testFilesDidExist) {
       addOneTestCase = false; // This will be automatic
-      var {programReproducingError: testFileContent, languageServerDiagnostic, languageServerIcons, skipTestCreation} =
+      var {programReproducingError: testFileContent, test_type} =
         await interactivelyCreateTestFileContent(issueNumber, providedContent);
-      if(!skipTestCreation) {
-        if(languageServerDiagnostic) {
-          await testInfoLSDiagnostic.create(testFileContent);
-        } else if(languageServerIcons) {
-          await testInfoLSIcons.create(testFileContent);
-        } else {
-          await testInfo.create(testFileContent);
-        }
+      if(test_type != TEST_TYPE.SKIP_TEST_CREATION) {
+        testManagers[test_type].create(testFileContent);
       }
     }
-    var testsNowExist = testFilesDidExist || !skipTestCreation;
+    var testsNowExist = testFilesDidExist || test_type != TEST_TYPE.SKIP_TEST_CREATION;
     if(addOneTestCase) {
-      await doAddExistingOrNewTest(testInfo, testInfoLSDiagnostic, testInfoLSIcons, providedIssueNumber);
+      await doAddExistingOrNewTest(testManagers, providedIssueNumber);
     }
 
-    if(!skipTestCreation && (!fixBranchDidExist || openFiles || neededToSwitchToExistingBranch)) {
-      for(let testManager of testManagers) {
+    if(test_type != TEST_TYPE.SKIP_TEST_CREATION && (!fixBranchDidExist || openFiles || neededToSwitchToExistingBranch)) {
+      for(let k in testManagers) {
+        var testManager = testManagers[k];
         if(await testManager.exists()) {
           testManager.openAndYield();
         }
@@ -874,17 +999,18 @@ async function Main() {
     }
 
     if(!fixBranchDidExist) {
-      await createBranchAndAddTestFiles(testManagers, branchName, skipTestCreation);
+      await createBranchAndAddTestFiles(testManagers, branchName, test_type == TEST_TYPE.SKIP_TEST_CREATION);
     }
     if(testsNowExist) {
-      for(let testManager of testManagers) {
+      for(let k in testManagers) {
+        var testManager = testManagers[k];
         if(await testManager.exists()) {
           await testManager.displayRunHelp();
         }
       }
     }
     if((!fixBranchDidExist || !testFilesDidExist || openFiles) &&
-        (!skipVerification || !skipTestCreation)) {
+        (!skipVerification || test_type != TEST_TYPE.SKIP_TEST_CREATION)) {
       var withoutOpen = open ? " (without 'open')" : "";
       console.log(`All set! Now focus on making the test git-issues/git-issue-${issueNumber}.dfy to pass. You can add additional tests such as git-issues/git-issue-${issueNumber}.dfy`);
       console.log(`When the tests succeed, re-run this script to verify the fix and create the PR.\nYou can run the same command-line${withoutOpen}.`);
@@ -925,7 +1051,8 @@ async function Main() {
         } else {
           console.log(testResult.log);
           console.log("The test did not pass. Please fix the issue and re-run this script after ensuring that the following command-line succeeds:\n");
-          for(let testManager of testManagers) {
+          for(let k in testManagers) {
+            var testManager = testManagers[k];
             if(await testManager.exists()) {
               testManager.displayXunitTestCmd();
             }
