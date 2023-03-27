@@ -483,7 +483,7 @@ async function verifyFix(testManagers) {
   var verified = true;
   var testManagerVerified = false;
   for(let k in testManagers) {
-    var testManager = testManages[k];
+    var testManager = testManagers[k];
     if(await testManager.exists()) {
       var testCmd = await testManager.xunitTestCmd();
       console.log("Running:"+testCmd);
@@ -575,7 +575,8 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
     name: getIntegrationTestFileName(issueNumber, suffix),
     nameExpect: getIntegrationTestFileExpectName(issueNumber, suffix),
     async exists() {
-      return fs.existsSync(this.name);
+      var fileExists = this.name != null && fs.existsSync(this.name);
+      return fileExists;
     },
     async create(content) {
       if(await this.exists()) {
@@ -803,11 +804,13 @@ ${content.replace(/"/g,"\"\"")}");
     existingTests: null,
     name: name,
     async recoverData() {
-      if(!this.testFileContent) {
+      if(!this.testFileContent && fs.existsSync(this.testFile)) {
         this.testFileContent = await fs.promises.readFile(this.testFile, "utf-8");
       }
       if(!this.testFileContent) {
         console.log("Could not find " + this.testFile);
+        this.existingTests = [];
+        return;
       }
       if(this.existingTests == null) {
         this.existingTests = [];
