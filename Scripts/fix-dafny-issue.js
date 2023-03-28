@@ -58,9 +58,9 @@
  * If you want to add a new or existing test case for the same issue
  * (e.g. Test/git-issues/git-issue-<issueNumber>b.dfy), run
  * 
- *     > fix more <optional existing issue # or existing test name>
+ *     > fix more|add <optional existing issue # or existing test name>
  * 
- * If you just write `fix more`, you will be prompted for the argument.
+ * If you just write `fix more` or `fix add`, you will be prompted for the argument.
  * - Providing a number will let you import another GitHub issue.
  * - Providing an existing integration test name pattern will ensure that all these
  *   selected tests are run when you run `fix` without arguments.
@@ -248,8 +248,8 @@ function processArgs() {
   var openFiles = false;
   var skipVerification = false;
   var addOneTestCase = false;
-  while(args[2] in {"open": 0, "force": 0, "more": 0}) {
-    if(args[2] == "open") {
+  while(args[2] in {"open": 0, "force": 0, "more": 0, "add": 0}) {
+    if(args[2] == "open" || args[2] == "add") {
       args.splice(2, 1);
       openFiles = true;
     } else if(args[2] == "force") {
@@ -808,7 +808,7 @@ ${content.replace(/"/g,"\"\"")}");
         this.testFileContent = await fs.promises.readFile(this.testFile, "utf-8");
       }
       if(!this.testFileContent) {
-        console.log("Could not find " + this.testFile);
+        //console.log("Could not find " + this.testFile);
         this.existingTests = [];
         return;
       }
@@ -997,8 +997,13 @@ async function Main() {
         }
       }
     }
-    if(neededToSwitchToExistingBranch) { // We opened the files previously, but we rebuild the solution afterwards. Is that ok?
-      await buildSolution(issueNumber);
+    if(neededToSwitchToExistingBranch) {
+      if(ok(await question(`You switched branches. Rebuild solution now? (ENTER or y for yes)`)) ){
+        skipVerification = skipVerification || !ok(await question(`Ok, will rebuild. Do you want to reverify tests afterwards? (ENTER or y for yes)`));
+        await buildSolution(issueNumber);
+      } else {
+        skipVerification = true;
+      }
     }
 
     if(!fixBranchDidExist) {
