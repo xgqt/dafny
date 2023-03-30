@@ -561,7 +561,7 @@ async function commitAllAndPush(testInfo, commitMessage, branchName, testsNowExi
 
 // A test testManager either considers
 // - A pair of git-issues/git-issue-<issuenumber>.dfy and its expect file
-// - A simple [TestMethod] in DiagnosticsTest.cs and its assertions.
+// - A simple [Fact] in DiagnosticsTest.cs and its assertions.
 
 // A branch can list several tests to consider. All need to run correctly.
 
@@ -656,7 +656,7 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
 }
 
 function getLanguageServerDiagnosticTestManager(issueNumber, issueKeyword, name = "") {
-  const testTemplate = (methodName, content) => `[TestMethod]
+  const testTemplate = (methodName, content) => `[Fact]
     public async Task ${methodName}() {
       var source = @"
 ${content.replace(/"/g,"\"\"")}".TrimStart();
@@ -664,11 +664,11 @@ ${content.replace(/"/g,"\"\"")}".TrimStart();
       await client.OpenDocumentAndWaitAsync(documentItem, CancellationToken);
       // Uncomment what you need.
       // var diagnostics = await GetLastDiagnostics(documentItem, CancellationToken);
-      // Assert.AreEqual(1, diagnostics.Length);
+      // Assert.Equal(1, diagnostics.Length);
       // ApplyChange(ref documentItem, ((0, 0), (3, 0)), "insert text");
       // diagnostics = await GetLastDiagnostics(documentItem, CancellationToken); // If expect no parsing error
       // diagnostics = await diagnosticsReceiver.AwaitNextDiagnosticsAsync(CancellationToken); // If expect parsing errors
-      // Assert.AreEqual(0, diagnostics.Length);
+      // Assert.Equal(0, diagnostics.Length);
       
       await AssertNoDiagnosticsAreComing(CancellationToken);
     }
@@ -678,7 +678,7 @@ ${content.replace(/"/g,"\"\"")}".TrimStart();
 }
 
 function getLanguageServerGutterIconsManager(issueNumber, issueKeyword, name = "") {
-  const testTemplate = (methodName, content) => `[TestMethod]
+  const testTemplate = (methodName, content) => `[Fact]
   public async Task ${methodName}() {
     await VerifyTrace(@"
 ${content.replace(/"/g,"\"\"")}", intermediates: false);
@@ -734,9 +734,9 @@ function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyw
     },
     async create(content) {
       await this.recoverData();
-      var firstTestMatch = /\[TestMethod\]/.exec(this.testFileContent);
+      var firstTestMatch = /\[Fact\]/.exec(this.testFileContent);
       if(!firstTestMatch) {
-        console.log(`Could not find [TestMethod] in ${this.testFile}`);
+        console.log(`Could not find [Fact] in ${this.testFile}`);
         throw ABORTED;
       }
       var i = firstTestMatch.index;
@@ -776,7 +776,7 @@ function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyw
       await addAll(this.patternsToAddToGit(), fileName);
     },
     async xunitTestCmd() {
-      return `dotnet test --nologo Source/DafnyLanguageServer.Test --filter Name~${this.rawMethodName()}`;
+      return `dotnet test --nologo Source/DafnyLanguageServer.Test --filter ${this.rawMethodName()}`;
     }
   };
 }
@@ -936,7 +936,7 @@ async function doAddExistingOrNewTest(testManagers, moreText) {
   if(test_type == TEST_TYPE.SKIP_TEST_CREATION) {
     throw ABORTED;
   }
-  testManagers[test_type].create(programReproducingError);
+  await testManagers[test_type].create(programReproducingError);
   testManagers[test_type].openAndYield();
 }
 
