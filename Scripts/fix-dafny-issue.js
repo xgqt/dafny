@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-/*
- * This file makes it possible to fix an error in Dafny in no time.
+const help = `
+ * 'fix' makes it possible to fix an error in Dafny in no time.
  * Add the following alias in your bash profile:
  * 
  *     alias fix='node scripts/fix-dafny-issue.js'
@@ -14,23 +14,23 @@
  * - It asks you for the issue number and issue keyword if not provided
  * - It fetches the reproducing code of the issue
  * - It adds the test to the codebase
- *   - If it's a CI test, it creates `Test/git-issues/git-issue-<issueNumber>.dfy`
- *     and `Test/git-issues/git-issue-<issueNumber>.dfy.expect`
+ *   - If it's a CI test, it creates \`Test/git-issues/git-issue-<issueNumber>.dfy\`
+ *     and \`Test/git-issues/git-issue-<issueNumber>.dfy.expect\`
  *     ensuring it contains a header that LIT can parse, considering the possibility that it needs to be run
  *     Then, it opens these two files in their default editor.
  *   - If it's a language server tests, it adds the code as a first test to
- *     `DafnyLanguageServer.Text/Synchronization/DiagnosticsTest.cs` and 
+ *     \`DafnyLanguageServer.Text/Synchronization/DiagnosticsTest.cs\` and 
  *     creates commented placeholders for the interaction and expected results.
- * - It creates a branch named `fix-<issueNumber>-<issueKeyword>`, and commits the files there immediately
+ * - It creates a branch named \`fix-<issueNumber>-<issueKeyword>\`, and commits the files there immediately
  * - It provides you with information to debug the issue in Rider, in CLI dotnet, or just run Dafny.
  * 
- * For an issue that already exists, then you enter the command `fix` alone,
+ * For an issue that already exists, then you enter the command \`fix\` alone,
  * - It compiles and runs the tests (CI or Language Server, or both)
  * - If all the tests pass, it asks you if you want to commit the changes.
  *   If you accept:
- * - It creates the `doc/dev/news/<issueNumber>.fix` file for you the first time, asking you about its content
+ * - It creates the \`doc/dev/news/<issueNumber>.fix\` file for you the first time, asking you about its content
  * - It adds all new and modified files
- *   (including other `git-issue-<issueNumber><suffix>.dfy` files)
+ *   (including other \`git-issue-<issueNumber><suffix>.dfy\` files)
  * - It pushes the changes
  * - If the first time it's pushed, it opens your browser with a page
  *   to create the PR with the title and description already populated.
@@ -60,12 +60,12 @@
  * 
  *     > fix more|add <optional existing issue # or existing test name>
  * 
- * If you just write `fix more` or `fix add`, you will be prompted for the argument.
+ * If you just write \`fix more\` or \`fix add\`, you will be prompted for the argument.
  * - Providing a number will let you import another GitHub issue.
  * - Providing an existing integration test name pattern will ensure that all these
- *   selected tests are run when you run `fix` without arguments.
+ *   selected tests are run when you run \`fix\` without arguments.
  *   If more than one test is found, you'll be prompted to confirm your choices.
- */
+`;
 
 if(process.cwd().endsWith("scripts")) {
   process.chdir("..");
@@ -260,6 +260,14 @@ function processArgs() {
       addOneTestCase = true;
     }
   }
+  if(args[2] == "--help") {
+    console.log(help);
+    process.exit(0);
+  }
+  if(args[2] != null && args[2].startsWith('--')) {
+    console.log("This script does not take options except --help. Did you mean `fix "+args[2].substring(2)+"`?");
+    process.exit(0);
+  }
   return {args, openFiles, skipVerification, addOneTestCase};
 }
 
@@ -389,7 +397,8 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
     }
   } else {
     var shouldVerify = ok(await question("Will the test eventually pass verification? "+ACCEPT_HINT));
-    header = `// RUN: ${(shouldVerify ? "" : "%exits-with 4 ")}%baredafny verify %args "%s" > "%t"\n`;
+    var shouldResolve = shouldVerify || ok(await question("Will the test eventually pass resolution? "+ACCEPT_HINT));
+    header = `// RUN: ${(shouldVerify ? "" : (shouldResolve ? "%exits-with 4 " : "%exits-with 2 "))}%baredafny verify %args "%s" > "%t"\n`;
     programArguments = "verify";
   }
   header += `// RUN: %diff "%s.expect" "%t"\n\n`;
@@ -1049,7 +1058,7 @@ async function Main() {
           var {releaseNotesLine, extension} = await getReleaseNotesLine(issueNumber);
           await addTownCrierEntry(issueNumber, releaseNotesLine, extension);
           var prContent = `This PR fixes #${issueNumber}\nI added the corresponding test.\n\n<small>By submitting this pull request, I confirm that my contribution is made under the terms of the [MIT license](https://github.com/dafny-lang/dafny/blob/master/LICENSE.txt).</small>`;
-          commitMessage = `Fix: ${releaseNotesLine}`;
+          commitMessage = `${(extension == "fix" ? "Fix" : "Feat")}: ${releaseNotesLine}`;
         } else {
           commitMessage = await question("What should be the commit message?\n");
         }
