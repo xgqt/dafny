@@ -519,7 +519,7 @@ async function getReleaseNotesLine(issueNumber) {
   var extension = "fix";
   releaseNotesLine = await question("What should we put in the release notes? Press ENTER if it is merely a feature\nFix: ");
   if(releaseNotesLine.trim() == "") {
-    releaseNotesLine = await question("What should we put in the release notes?\nFeat :");
+    releaseNotesLine = await question("What should we put in the release notes?\nFeat: ");
     if(releaseNotesLine.trim() == "") {
       throw ABORTED;
     }
