@@ -516,13 +516,21 @@ async function getReleaseNotesLine(issueNumber) {
   } else {
     console.log("This was the title of the issue: '" + releaseNotesLine + "'");
   }
-  releaseNotesLine = await question("What should we put in the release notes?\nFix: ");
-  return releaseNotesLine;
+  var extension = "fix";
+  releaseNotesLine = await question("What should we put in the release notes? Press ENTER if it is merely a feature\nFix: ");
+  if(releaseNotesLine.trim() == "") {
+    releaseNotesLine = await question("What should we put in the release notes?\nFeat :");
+    if(releaseNotesLine.trim() == "") {
+      throw ABORTED;
+    }
+    extension = "feat";
+  }
+  return {releaseNotesLine,extension};
 }
 
 // Add the docs/dev/news/<issueNumber>.fix file
-async function addTownCrierEntry(issueNumber, releaseNotesLine) {
-  var towncrier = `docs/dev/news/${issueNumber}.fix`;
+async function addTownCrierEntry(issueNumber, releaseNotesLine, extension) {
+  var towncrier = `docs/dev/news/${issueNumber}.${extension}`;
   if(!fs.existsSync(towncrier)) {
     await execLog(`touch ${towncrier}`, `Creating file ${towncrier}`);
     await execLog(`git add ${towncrier}`, `Adding file ${towncrier}`);
@@ -998,11 +1006,12 @@ async function Main() {
       }
     }
     if(neededToSwitchToExistingBranch) {
+      skipVerification = false;
       if(ok(await question(`You switched branches. Rebuild solution now? (ENTER or y for yes)`)) ){
-        skipVerification = skipVerification || !ok(await question(`Ok, will rebuild. Do you want to reverify tests afterwards? (ENTER or y for yes)`));
+        neededToSwitchToExistingBranch = !ok(await question(`Ok, will rebuild. Do you want to reverify tests afterwards? (ENTER or y for yes)`));
         await buildSolution(issueNumber);
       } else {
-        skipVerification = true;
+        neededToSwitchToExistingBranch = true;
       }
     }
 
@@ -1024,7 +1033,7 @@ async function Main() {
       console.log(`When the tests succeed, re-run this script to verify the fix and create the PR.\nYou can run the same command-line${withoutOpen}.`);
     } else {
       var testResult = {};
-      if(skipVerification || ((testResult = await verifyFix(testManagers), testResult.ok)) && !neededToSwitchToExistingBranch) {
+      if(skipVerification || !neededToSwitchToExistingBranch && ((testResult = await verifyFix(testManagers), testResult.ok))) {
         var wasPushed = await originAlreadyExists(branchName);
         if(skipVerification) {
           console.log(`You indicated "force", so you assume that this commit solves the issue #${issueNumber}.`);
@@ -1037,8 +1046,8 @@ async function Main() {
         }
         var commitMessage = "";
         if(!wasPushed) {
-          var releaseNotesLine = await getReleaseNotesLine(issueNumber);
-          await addTownCrierEntry(issueNumber, releaseNotesLine);
+          var {releaseNotesLine, extension} = await getReleaseNotesLine(issueNumber);
+          await addTownCrierEntry(issueNumber, releaseNotesLine, extension);
           var prContent = `This PR fixes #${issueNumber}\nI added the corresponding test.\n\n<small>By submitting this pull request, I confirm that my contribution is made under the terms of the [MIT license](https://github.com/dafny-lang/dafny/blob/master/LICENSE.txt).</small>`;
           commitMessage = `Fix: ${releaseNotesLine}`;
         } else {
