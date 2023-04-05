@@ -440,7 +440,7 @@ async function helpIfDllLock(output) {
   const notWindows = process.platform == 'darwin';
   
   for(let dll of ["DafnyCore.dll", "DafnyLanguageServer.dll"]) {
-    if(output.match(new RegExp(`warning MSB3026: Could not copy.*${dll}' because it is being used by another process`))) {
+    if(output && output.match(new RegExp(`warning MSB3026: Could not copy.*${dll}' because it is being used by another process`))) {
       console.log(`Looks like ${dll} is locked by another process. Let's find out which one.`);
       // If we are on Windows, it's a different command
       var command = notWindows ? `lsof -w -Fp Binaries/${dll}` : "tasklist.exe -m "+dll;
@@ -496,7 +496,7 @@ async function verifyFix(testManagers) {
     if(await testManager.exists()) {
       var testCmd = await testManager.xunitTestCmd();
       console.log("Running:"+testCmd);
-      var testManagerResults = await execLog(testCmd, "\nCompiling and verifying the fix for "+testManager.type+"... (looping forever means bug)", false);
+      var testManagerResults = await execLog(testCmd, "\nCompiling and verifying the fix for "+testManager.type+"... (not terminating sometimes means bug or need to restart 'fix')", false);
       testManagerResults = testManagerResults.stdout + testManagerResults.stderr;
       testManagerVerified = testManagerResults.match(/Failed:\s*0\s*,\s*Passed:\s*(?!0)/);
       testResult += testManagerResults;
@@ -618,6 +618,15 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
     openAndYield() {
       openAndYield(this.name);
       openAndYield(this.nameExpect);
+      var suffix = "abcdefghijklmnopqrstuvwxyz";
+      var indexSuffix = 0;
+      while(indexSuffix < suffix.length &&
+            fs.existsSync(getIntegrationTestFileName(this.issueNumber, suffix[indexSuffix]))) {
+        var otherName = getIntegrationTestFileName(this.issueNumber, suffix[indexSuffix]);
+        openAndYield(otherName);
+        openAndYield(otherName+".expect");
+        indexSuffix++;
+      }
     },
     async displayXunitTestCmd() {
       console.log((await this.xunitTestCmd()).replace(/csproj --filter/g, "csproj \\\n--filter").replace(/\|/g, "|\\\n"));
@@ -994,6 +1003,9 @@ async function Main() {
       testFilesDidExist = testFilesDidExist || await testManagers[i].exists();
     }
     if(!testFilesDidExist) {
+      if(fixBranchDidExist) {
+        console.log("You still haven't set up any test for your branch.");
+      }
       addOneTestCase = false; // This will be automatic
       var {programReproducingError: testFileContent, test_type} =
         await interactivelyCreateTestFileContent(issueNumber, providedContent);
@@ -1038,8 +1050,12 @@ async function Main() {
     if((!fixBranchDidExist || !testFilesDidExist || openFiles) &&
         (!skipVerification || test_type != TEST_TYPE.SKIP_TEST_CREATION)) {
       var withoutOpen = open ? " (without 'open')" : "";
-      console.log(`All set! Now focus on making the test git-issues/git-issue-${issueNumber}.dfy to pass. You can add additional tests such as git-issues/git-issue-${issueNumber}.dfy`);
-      console.log(`When the tests succeed, re-run this script to verify the fix and create the PR.\nYou can run the same command-line${withoutOpen}.`);
+      if(fixBranchDidExist && !testFilesDidExist) {
+        console.log("You don't have any tests set. You can force push your changes using 'fix force'");
+      } else {
+        console.log(`All set! Now focus on making the tests to pass. You can add additional tests by typing 'fix more'`);
+        console.log(`When the tests succeed, re-run this script to verify the fix and create the PR.\nYou can run the same command-line${withoutOpen}.`);
+      }
     } else {
       var testResult = {};
       if(skipVerification || !neededToSwitchToExistingBranch && ((testResult = await verifyFix(testManagers), testResult.ok))) {
