@@ -24,7 +24,7 @@ const help = `
  * - It creates a branch named \`fix-<issueNumber>-<issueKeyword>\`, and commits the files there immediately
  * - It provides you with information to debug the issue in Rider, in CLI dotnet, or just run Dafny.
  * 
- * For an issue that already exists, then you enter the command \`fix\` alone,
+ * For an issue that already exists, then you enter the command \`fix\` alone (with possible a --message argument)
  * - It compiles and runs the tests (CI or Language Server, or both)
  * - If all the tests pass, it asks you if you want to commit the changes.
  *   If you accept:
@@ -248,6 +248,7 @@ function processArgs() {
   var openFiles = false;
   var skipVerification = false;
   var addOneTestCase = false;
+  var defaultMessage = null;
   while(args[2] in {"open": 0, "force": 0, "more": 0, "add": 0}) {
     if(args[2] == "open" || args[2] == "add") {
       args.splice(2, 1);
@@ -264,11 +265,19 @@ function processArgs() {
     console.log(help);
     process.exit(0);
   }
+  if(args[2] == "--message") {
+    if(args.length < 4) {
+      console.log("Missing message");
+      process.exit(1);
+    }
+    defaultMessage = args[3];
+    args.splice(2, 2);
+  }
   if(args[2] != null && args[2].startsWith('--')) {
-    console.log("This script does not take options except --help. Did you mean `fix "+args[2].substring(2)+"`?");
+    console.log("This script does not take options except --help and --message. Did you mean `fix "+args[2].substring(2)+"`?");
     process.exit(0);
   }
-  return {args, openFiles, skipVerification, addOneTestCase};
+  return {args, openFiles, skipVerification, addOneTestCase, defaultMessage};
 }
 
 // Given the arguments, returns the issue number and the issue keyword.
@@ -971,7 +980,7 @@ async function doAddExistingOrNewTest(testManagers, moreText) {
 
 // The main function
 async function Main() {
-  var {openFiles, skipVerification, addOneTestCase, args} = processArgs();
+  var {openFiles, skipVerification, addOneTestCase, args, defaultMessage} = processArgs();
   var fixBranchDidExist = false;
   var testFileContent = "";
   var providedIssueNumber = args[2];
@@ -1066,17 +1075,28 @@ async function Main() {
           console.log(`\nCongratulations for ${wasPushed ? "ensuring this new commit still solves" : "solving"} issue #${issueNumber}!`);
         }
 
-        if(!wasPushed && !ok(await question("Are you ready to create the PR? " + ACCEPT_HINT))) {
+        if(!wasPushed && defaultMessage == null && !ok(await question("Are you ready to create the PR? " + ACCEPT_HINT))) {
           throw ABORTED;
         }
         var commitMessage = "";
         if(!wasPushed) {
-          var {releaseNotesLine, extension} = await getReleaseNotesLine(issueNumber);
+          if(defaultMessage != null) {
+            // defaultMessage is either a "Fix: ..." or "Feat: ..." so we need to extract them. If not, error.
+            var [extension, releaseNotesLine] = defaultMessage.split(":");
+            releaseNotesLine = releaseNotesLine.trim();
+            extension = extension.toLowerCase();
+            if(extension != "fix" && extension != "feat") {
+              console.log("The default message must start with 'Fix:' or 'Feat:'");
+              var {releaseNotesLine, extension} = await getReleaseNotesLine(issueNumber);
+            }
+          } else {
+            var {releaseNotesLine, extension} = await getReleaseNotesLine(issueNumber);
+          }
           await addTownCrierEntry(issueNumber, releaseNotesLine, extension);
           var prContent = `This PR fixes #${issueNumber}\nI added the corresponding test.\n\n<small>By submitting this pull request, I confirm that my contribution is made under the terms of the [MIT license](https://github.com/dafny-lang/dafny/blob/master/LICENSE.txt).</small>`;
           commitMessage = `${(extension == "fix" ? "Fix" : "Feat")}: ${releaseNotesLine}`;
         } else {
-          commitMessage = await question("What should be the commit message?\n");
+          commitMessage = defaultMessage ?? await question("What should be the commit message?\n");
         }
         await commitAllAndPush(testInfo, commitMessage, branchName, testsNowExist);
         if(!wasPushed) {
