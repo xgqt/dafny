@@ -504,7 +504,7 @@ async function verifyFix(testManagers) {
     var testManager = testManagers[k];
     if(await testManager.exists()) {
       var testCmd = await testManager.xunitTestCmd();
-      console.log("Running:"+testCmd);
+      console.log("\nRunning:"+testCmd);
       var testManagerResults = await execLog(testCmd, "\nCompiling and verifying the fix for "+testManager.type+"... (not terminating sometimes means bug or need to restart 'fix')", false);
       testManagerResults = testManagerResults.stdout + testManagerResults.stderr;
       testManagerVerified = testManagerResults.match(/Failed:\s*0\s*,\s*Passed:\s*(?!0)/);
@@ -585,18 +585,43 @@ async function commitAllAndPush(testInfo, commitMessage, branchName, testsNowExi
   await execLog(`git push origin --set-upstream ${branchName}`, "Pushing the fix to GitHub...");
 }
 
-// A test testManager either considers
+async function getAllAddedTestsWithPrefix(PREFIX, displayName) {
+  // List all the log messages since the branch was created
+  var cmd = "git log --oneline --no-merges --pretty=format:%s origin/master..HEAD";
+  // Execute the command above using execLog
+  var output = (await execLog(cmd, "Listing all the log messages since the branch was created...")).stdout;
+  // Keep only the lines of output that start with "PREFIX:", remove any single quotes on the be and remove the prefix
+  var lines = output.split("\n").filter(l => l.startsWith(PREFIX + ":")).map(l => l.substring(PREFIX.length + 1));
+  // Split every item by spaces and flatten the result
+  var moreTestCases = [].concat.apply([], lines.map(l => l.split(" ")));
+  // Prefix every test case with "|DisplayName~" and concatenate everything
+  var testCases = moreTestCases.map(t => "|" + (displayName ? "DisplayName~" : "") + t).join("");
+  return testCases;
+}
+
+// A test manager has several abilities
+// - "exists" It can test if, given the issue number, there exist already some tests with that number
+// - "create": Given some content, it can create a test file
+// - "openAndYield": It can open the test files for the given issue number in their respective editors
+// - "displayRunHelp": If tests exist, it display help to run them manually
+// - "addToGit": Adds all the relevant tests files to git
+// - "xunitTestCmd": A command to run all the tests
+// - "addExisting": Given a hint, can look for existing tests and add them
+
+
+function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
+  // A test testManager either considers
 // - A pair of git-issues/git-issue-<issuenumber>.dfy and its expect file
 // - A simple [Fact] in DiagnosticsTest.cs and its assertions.
 
 // A branch can list several tests to consider. All need to run correctly.
 
-function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
   return {
     type: "integration-test",
     shortName: `git-issues/git-issue-${issueNumber}${suffix}.dfy`,
     issueNumber: issueNumber,
     issueKeyword: issueKeyword,
+    commitPrefix: "FIXER", // Prefix to identify additional tests
     // This one are private
     name: getIntegrationTestFileName(issueNumber, suffix),
     nameExpect: getIntegrationTestFileExpectName(issueNumber, suffix),
@@ -608,7 +633,6 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
       if(await this.exists()) {
         var suffix = "abcdefghijklmnopqrstuvwxyz";
         var indexSuffix = 0;
-        var testInfo = null;
         while(indexSuffix < suffix.length &&
               fs.existsSync(getIntegrationTestFileName(this.issueNumber, suffix[indexSuffix]))) {
           indexSuffix++;
@@ -675,17 +699,33 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
     // Returns the command to test all the tests that this branch depends on, on dotnet
     async xunitTestCmd() {
       var issueNumber = this.issueNumber;
-      // List all the log messages since the branch was created
-      var cmd = "git log --oneline --no-merges --pretty=format:%s origin/master..HEAD";
-      // Execute the command above using execLog
-      var output = (await execLog(cmd, "Listing all the log messages since the branch was created...")).stdout;
-      // Keep only the lines of output that start with FIXER:, remove any single quotes on the be and remove the prefix
-      var lines = output.split("\n").filter(l => l.startsWith("FIXER:")).map(l => l.substring(6));
-      // Split every item by spaces and flatten the result
-      var moreTestCases = [].concat.apply([], lines.map(l => l.split(" ")));
-      // Prefix every test case with "|DisplayName~" and concatenate everything
-      var testCases = moreTestCases.map(t => "|DisplayName~" + t).join("");
-      return `dotnet test -v:n Source/IntegrationTests/IntegrationTests.csproj --filter "DisplayName~git-issues/git-issue-${issueNumber}${testCases}"`;
+      var addedTestCases = await getAllAddedTestsWithPrefix(this.commitPrefix, true);
+      return `dotnet test -v:n Source/IntegrationTests/IntegrationTests.csproj`+
+      ` --filter "DisplayName~git-issues/git-issue-${issueNumber}${addedTestCases}"`;
+    },
+    // Adds one more existing test to the branch by adding it in an empty commit.
+    async addExisting(issueHint) {
+      var testName = issueHint;
+      // List all the files in Test/ that contain "testName", which might contain a directory separator
+      var testFiles = await execLog(`find Test/ -name "*.dfy"`, "Listing all the test files that contain "+testName);
+      testFiles = testFiles.stdout.split("\n").map(file => file.trim());
+      // Remove "Test/" from the prefix of each file
+      testFiles = testFiles.map(file => file.substring(5));
+      var testFile = testFiles.filter(file => file.indexOf(testName) >= 0);
+      if(testFile.length == 0) {
+        //console.log("Could not find the test file for "+testName);
+        return false;
+      }
+      console.log(`The following test file${testFile.length > 1 ? "s" : ""} will be added:`);
+      for(var file of testFile) {
+        console.log(file);
+      }
+      if(!ok(await question(`Confirm? ${ACCEPT_HINT}`))) {
+        return false;
+      }
+      var commitMessage = `${this.commitPrefix}:${testFile.join(" ")}`;
+      await execLog(`git commit --only --allow-empty -m "${commitMessage}"`, "Adding the tests files...");
+      return true;
     }
   };
 }
@@ -812,8 +852,34 @@ function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyw
     },
     async xunitTestCmd() {
       return `dotnet test --nologo Source/DafnyLanguageServer.Test --filter ${this.rawMethodName()}`;
+    },
+    async addExisting(issueHint) {
+      console.log("TODO: Need ability to add existing language server tests");
+      return false;
     }
   };
+}
+
+async function recoverTests(testManager, issueNumber) {
+  if(!testManager.testFileContent && fs.existsSync(testManager.testFile)) {
+    testManager.testFileContent = await fs.promises.readFile(testManager.testFile, "utf-8");
+  }
+  if(!testManager.testFileContent) {
+    //console.log("Could not find " + this.testFile);
+    testManager.existingTests = [];
+    return;
+  }
+  if(testManager.existingTests == null) {
+    testManager.existingTests = [];
+    testManager.regex.lastIndex = 0;
+    while(match = testManager.regex.exec(testManager.testFileContent)) {
+      if(match[2] == issueNumber + "") {
+        testManager.existingTests.push(match[1]);
+      }
+    }
+  }
+  testManager.MethodName = testManager.existingTests[0]; // Might be null
+  testManager.MethodName = testManager.rawMethodName();
 }
 
 function getFormatterManager(issueNumber, issueKeyword, name = "") {
@@ -839,25 +905,7 @@ ${content.replace(/"/g,"\"\"")}");
     existingTests: null,
     name: name,
     async recoverData() {
-      if(!this.testFileContent && fs.existsSync(this.testFile)) {
-        this.testFileContent = await fs.promises.readFile(this.testFile, "utf-8");
-      }
-      if(!this.testFileContent) {
-        //console.log("Could not find " + this.testFile);
-        this.existingTests = [];
-        return;
-      }
-      if(this.existingTests == null) {
-        this.existingTests = [];
-        this.regex.lastIndex = 0;
-        while(match = this.regex.exec(this.testFileContent)) {
-          if(match[2] == issueNumber + "") {
-            this.existingTests.push(match[1]);
-          }
-        }
-      }
-      this.MethodName = this.existingTests[0]; // Might be null
-      this.MethodName = this.rawMethodName();
+      await recoverTests(this, this.issueNumber);
     },
     rawMethodName() {
       return this.MethodName != null ? this.MethodName.replace(/[A-Z]$/, "") : null;
@@ -912,6 +960,120 @@ ${content.replace(/"/g,"\"\"")}");
     },
     async xunitTestCmd() {
       return `dotnet test --nologo Source/DafnyPipeline.Test --filter ${this.rawMethodName()}`;
+    },
+    async addExisting(issueHint) {
+      console.log("TODO: Need ability to add existing formatter tests");
+      return false;
+    }
+  };
+}
+
+
+function getTestGenerationManager(issueNumber, issueKeyword, name = "") {
+  if(name == "") {
+    name = DashToCamlCase(issueKeyword);
+  }
+  var fileName = "Various.cs";
+  /*const testTemplate = (methodName, content) => `[Fact]
+    public void ${methodName}() {
+      FormatterWorksFor(@"
+${content.replace(/"/g,"\"\"")}");
+    }
+    
+    `;*/
+  return {
+    type: "test generation",
+    shortName: `Test named 'GitIssue${issueNumber}${name}' in DafnyTestGeneration.Test/${fileName}`,
+    issueNumber: issueNumber,
+    issueKeyword: issueKeyword,
+    commitPrefix: "FIXER-TEST-GENERATION",
+    testFile: `Source/DafnyTestGeneration.Test/${fileName}`,
+    testFileContent: null,
+    regex: /public\s+async\s+Task\s+(GitIssue(\d+)\w+)\(\)\s*\{/g,
+    existingTests: null, // Existing tests for this issue number
+    addedTests: null, // Other tests
+    name: name,
+    async recoverData() {
+      await recoverTests(this, this.issueNumber);
+      this.addedTests = await getAllAddedTestsWithPrefix(this.commitPrefix, false);
+      if(this.addedTests.startsWith("|")) {
+        this.addedTests = this.addedTests.substring(1);
+      }
+    },
+    rawMethodName() {
+      // Remove any letter suffix so that we have a pattern that can cover all similar issues
+      return this.MethodName != null ? this.MethodName.replace(/[A-Z]$/, "") : null;
+    },
+    async exists() {
+      await this.recoverData();
+      return this.existingTests.length > 0 || this.addedTests && this.addedTests.length > 0;
+    },
+    async create(content) {
+      console.log("Cannot create test generation yet");
+      throw ABORTED;
+    },
+    openAndYield() {
+      return false; // TODO
+      //openAndYield(this.testFile);
+      //console.log("Look for "+this.MethodName+"! It should be the first test.");
+    },
+    async displayXunitTestCmd() {
+      console.log((await this.xunitTestCmd()).replace(/Test --filter/g, "Test \\\n--filter").replace(/\|/g, "|\\\n"));
+    },
+    async displayRunHelp() {
+      await this.recoverData();
+      console.log("-------------------------------------------------------------");
+      console.log("| Run the test as part of the XUnit test:                   |");
+      this.displayXunitTestCmd()
+      console.log("-------------------------------------------------------------");
+      console.log("| Run the test in DafnyTestGeneration.Test in Rider:        |");
+      console.log(this.MethodName);
+      console.log("-------------------------------------------------------------");
+    },
+    patternsToAddToGit() {
+      return [ this.testFile ];
+    },
+    async addToGit() {
+      await addAll(this.patternsToAddToGit(), fileName);
+    },
+    async xunitTestCmd() {
+      return `dotnet test --nologo Source/DafnyTestGeneration.Test/DafnyTestGeneration.Test.csproj --filter ${this.addedTests}`;
+    },
+    async addExisting(issueHint) {
+      // Find all lines `async\s+Task\s+(...issueHint...)\s*` in any .cs file inside Source/DafnyTestGeneration.Test
+      // Display entire lines, NOT the file names
+      var testFiles = await execLog("git ls-files Source/DafnyTestGeneration.Test/*.cs", "Searching for test files...");
+      if(testFiles.stderr || !testFiles.stdout) {
+        console.log(testFiles.stderr);
+        return false;
+      }
+      var csFiles = testFiles.stdout;
+      var regex = new RegExp("async\\s+Task\\s+(.*"+issueHint+"[^\\(]*)", "g");
+      var fullMethodNames = []; // array of [file, method];
+
+      for(var csFile of csFiles.split("\n").filter(x => x.length > 0)) {
+        var fileContent = await fs.promises.readFile(csFile, 'utf-8');
+        var match = regex.exec(fileContent);
+        if(match) {
+          var methodName = match[1];
+          fullMethodNames.push([csFile, methodName]);
+        }
+      }
+      if(fullMethodNames.length == 0) {
+        return false;
+      }
+
+      console.log(`The following test generation test${fullMethodNames.length > 1 ? "s" : ""} will be added:`);
+      for(var [csFile, methodName] of fullMethodNames) {
+        console.log(`  ${methodName}()  (from ${csFile})`);
+      }
+      if(!ok(await question(`Confirm? ${ACCEPT_HINT}`))) {
+        return false;
+      }
+      var fullMethodNamesString = fullMethodNames.map(x => x[1]).join(",");
+      var commitMessage = `${this.commitPrefix}:${fullMethodNamesString}`;
+      await execLog(`git commit --only --allow-empty -m "${commitMessage}"`, "Adding the test generation tests files...");
+      return true;
     }
   };
 }
@@ -935,37 +1097,19 @@ function getIntegrationTestFileName(issueNumber, suffix = "") {
 function getIntegrationTestFileExpectName(issueNumber, suffix = "") {
   return getIntegrationTestFileName(issueNumber, suffix)+".expect";
 }
-// Adds one more existing test to the branch by adding it in an empty commit.
-async function doAddExistingIntegrationTest(testName) {
-  // List all the files in Test/ that contain "testName", which might contain a directory separator
-  var testFiles = await execLog(`find Test/ -name "*.dfy"`, "Listing all the test files that contain "+testName);
-  testFiles = testFiles.stdout.split("\n").map(file => file.trim());
-  // Remove "Test/" from the prefix of each file
-  testFiles = testFiles.map(file => file.substring(5));
-  var testFile = testFiles.filter(file => file.indexOf(testName) >= 0);
-  if(testFile.length == 0) {
-    console.log("Could not find the test file for "+testName);
-    throw ABORTED;
-  } else {
-    console.log(`The following test file${testFile.length > 1 ? "s" : ""} will be added:`);
-    for(var file of testFile) {
-      console.log(file);
-    }
-    if(!ok(await question(`Confirm? ${ACCEPT_HINT}`))) {
-      return;
-    }
-    var commitMessage = `FIXER:${testFile.join(" ")}`;
-    await execLog(`git commit --only --allow-empty -m "${commitMessage}"`, "Adding the tests files...");
-  }
-}
 // Process `fix more` with the given detected issueNumber, and moreText is the argument after "more".
 async function doAddExistingOrNewTest(testManagers, moreText) {
   var otherIssueNumber = moreText || await question("Please enter either\n-Another existing issue number from which to import tests\n-The name of an existing integration test\n-Blank if you want to create a new test manually\n");
   if(otherIssueNumber != "" && !otherIssueNumber.match(/^\d+$/)) {
-    console.log("The issue number seems to be an existing integration test case. Adding them to this branches' tests...");
-    return await doAddExistingIntegrationTest(otherIssueNumber);
+    for(let k in testManagers) {
+      var testManager = testManagers[k];
+      if(await testManager.addExisting(otherIssueNumber)) {
+        return;
+      }
+    }    
   }
-  
+
+  // Let's create a new test.
   var {programReproducingError, test_type} =
     await interactivelyCreateTestFileContent(otherIssueNumber);
   if(test_type == TEST_TYPE.SKIP_TEST_CREATION) {
@@ -1005,7 +1149,8 @@ async function Main() {
       [TEST_TYPE.INTEGRATION] : testInfo,
       [TEST_TYPE.LANGUAGE_SERVER] : testInfoLSDiagnostic,
       [TEST_TYPE.LANGUAGE_SERVER_ICONS] : testInfoLSIcons,
-      [TEST_TYPE.FORMATTER] : testInfoFormatter
+      [TEST_TYPE.FORMATTER] : testInfoFormatter,
+      [TEST_TYPE.TEST_GENERATION]: getTestGenerationManager(issueNumber, issueKeyword)
     };
     var testFilesDidExist = addOneTestCase;
     for(let i in testManagers) {
@@ -1067,7 +1212,8 @@ async function Main() {
       }
     } else {
       var testResult = {};
-      if(skipVerification || !neededToSwitchToExistingBranch && ((testResult = await verifyFix(testManagers), testResult.ok))) {
+      if(skipVerification || !neededToSwitchToExistingBranch && ((
+           testResult = await verifyFix(testManagers), testResult.ok))) {
         var wasPushed = await originAlreadyExists(branchName);
         if(skipVerification) {
           console.log(`You indicated "force", so you assume that this commit solves the issue #${issueNumber}.`);
