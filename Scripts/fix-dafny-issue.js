@@ -325,7 +325,7 @@ async function getIssueKeyword(issueNumber) {
   // Get the body field of the first post
   var issueKeyword = "title" in js ?
     js.title.toLowerCase().replace(/\b(a|the|fix|in|where|about)( |$)/g, "")
-    .replace(/[^a-zA-Z0-9]/g, "-") : "";
+    .replace(/[^a-zA-Z0-9]+/g, "-") : "";
   while(issueKeyword.indexOf("-") >= 0 && issueKeyword.length > 50) {
     issueKeyword = issueKeyword.replace(/-[^-]*$/, "");
   }
@@ -585,7 +585,7 @@ async function commitAllAndPush(testInfo, commitMessage, branchName, testsNowExi
   await execLog(`git push origin --set-upstream ${branchName}`, "Pushing the fix to GitHub...");
 }
 
-async function getAllAddedTestsWithPrefix(PREFIX, displayName) {
+async function getAllAddedTestsWithPrefix(PREFIX) {
   // List all the log messages since the branch was created
   var cmd = "git log --oneline --no-merges --pretty=format:%s origin/master..HEAD";
   // Execute the command above using execLog
@@ -595,8 +595,7 @@ async function getAllAddedTestsWithPrefix(PREFIX, displayName) {
   // Split every item by spaces and flatten the result
   var moreTestCases = [].concat.apply([], lines.map(l => l.split(" ")));
   // Prefix every test case with "|DisplayName~" and concatenate everything
-  var testCases = moreTestCases.map(t => "|" + (displayName ? "DisplayName~" : "") + t).join("");
-  return testCases;
+  return moreTestCases.filter(t => t != null && t.length > 0);
 }
 
 // A test manager has several abilities
@@ -621,13 +620,20 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
     shortName: `git-issues/git-issue-${issueNumber}${suffix}.dfy`,
     issueNumber: issueNumber,
     issueKeyword: issueKeyword,
+    addedTestCases: null,
     commitPrefix: "FIXER", // Prefix to identify additional tests
     // This one are private
     name: getIntegrationTestFileName(issueNumber, suffix),
     nameExpect: getIntegrationTestFileExpectName(issueNumber, suffix),
+    async recoverData() {
+      if(this.addedTestCases == null) {
+        this.addedTestCases = await getAllAddedTestsWithPrefix(this.commitPrefix, true);
+      }
+    },
     async exists() {
+      await this.recoverData();
       var fileExists = this.name != null && fs.existsSync(this.name);
-      return fileExists;
+      return fileExists || this.addedTestCases != null && this.addedTestCases.length > 0;
     },
     async create(content) {
       if(await this.exists()) {
@@ -648,9 +654,13 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
       console.log(`Going to create the test files ${this.name} and ${this.nameExpect}...`);
       await createTestFilesAndExpect(this.name, this.nameExpect, content);
     },
-    openAndYield() {
-      openAndYield(this.name);
-      openAndYield(this.nameExpect);
+    async openAndYield() {
+      await this.recoverData();
+      if(this.name != null && fs.existsSync(this.name)) {
+        console.log("yes")
+        openAndYield(this.name);
+        openAndYield(this.nameExpect);
+      }
       var suffix = "abcdefghijklmnopqrstuvwxyz";
       var indexSuffix = 0;
       while(indexSuffix < suffix.length &&
@@ -660,15 +670,27 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
         openAndYield(otherName+".expect");
         indexSuffix++;
       }
+      // Plus all added tests
+      if(this.addedTestCases != null) {
+        // Remove DisplayName~ from the added test cases
+        for(var testCase of this.addedTestCases) {
+          openAndYield("Test/"+testCase);
+        }
+      }
+
     },
     async displayXunitTestCmd() {
       console.log((await this.xunitTestCmd()).replace(/csproj --filter/g, "csproj \\\n--filter").replace(/\|/g, "|\\\n"));
     },
     async displayRunHelp() {
-      var programArguments = await getTestArguments(this.name);
+      var testFile = this.name;
+      if(testFile == null || !fs.existsSync(this.name)) {
+        // Take the first file from additional
+        testFile = "Test/"+this.addedTestCases[0];
+      }
+      var programArguments = await getTestArguments(testFile);
       var issueNumber = this.issueNumber;
       var issueKeyword = this.issueKeyword;
-      var testFile = this.name;
       console.log("-------------------------------------------------------------");
       console.log("| Ensure you put the path of the language server for VSCode:|");
       console.log(`Dafny: Language Server Runtime Path:\n${process.cwd()}/Binaries/Dafny.exe`);
@@ -698,10 +720,12 @@ function getIntegrationTestManager(issueNumber, issueKeyword, suffix = "") {
     },
     // Returns the command to test all the tests that this branch depends on, on dotnet
     async xunitTestCmd() {
+      await this.recoverData();
       var issueNumber = this.issueNumber;
-      var addedTestCases = await getAllAddedTestsWithPrefix(this.commitPrefix, true);
+      var addedTestCasesString = this.addedTestCases.map(t => "|DisplayName~" + t).join("")
+      
       return `dotnet test -v:n Source/IntegrationTests/IntegrationTests.csproj`+
-      ` --filter "DisplayName~git-issues/git-issue-${issueNumber}${addedTestCases}"`;
+      ` --filter "DisplayName~git-issues/git-issue-${issueNumber}${addedTestCasesString}"`;
     },
     // Adds one more existing test to the branch by adding it in an empty commit.
     async addExisting(issueHint) {
@@ -824,7 +848,7 @@ function getLanguageServerManager(fileName, testTemplate, issueNumber, issueKeyw
       console.log(`Going to add test ${this.MethodName} in ${this.testFile}...`);
       await fs.promises.writeFile(this.testFile, newTestFileContent);
     },
-    openAndYield() {
+    async openAndYield() {
       openAndYield(this.testFile);
       console.log("Look for "+this.MethodName+"! It should be the first test.");
     },
@@ -932,7 +956,7 @@ ${content.replace(/"/g,"\"\"")}");
       console.log(`Going to add test ${this.MethodName} in ${this.testFile}...`);
       await fs.promises.writeFile(this.testFile, newTestFileContent);
     },
-    openAndYield() {
+    async openAndYield() {
       openAndYield(this.testFile);
       console.log("Look for "+this.MethodName+"! It should be the first test.");
     },
@@ -996,9 +1020,6 @@ ${content.replace(/"/g,"\"\"")}");
     async recoverData() {
       await recoverTests(this, this.issueNumber);
       this.addedTests = await getAllAddedTestsWithPrefix(this.commitPrefix, false);
-      if(this.addedTests.startsWith("|")) {
-        this.addedTests = this.addedTests.substring(1);
-      }
     },
     rawMethodName() {
       // Remove any letter suffix so that we have a pattern that can cover all similar issues
@@ -1012,7 +1033,7 @@ ${content.replace(/"/g,"\"\"")}");
       console.log("Cannot create test generation yet");
       throw ABORTED;
     },
-    openAndYield() {
+    async openAndYield() {
       return false; // TODO
       //openAndYield(this.testFile);
       //console.log("Look for "+this.MethodName+"! It should be the first test.");
@@ -1037,7 +1058,8 @@ ${content.replace(/"/g,"\"\"")}");
       await addAll(this.patternsToAddToGit(), fileName);
     },
     async xunitTestCmd() {
-      return `dotnet test --nologo Source/DafnyTestGeneration.Test/DafnyTestGeneration.Test.csproj --filter ${this.addedTests}`;
+      var addedTestsCmd = this.addedTests.join("|");
+      return `dotnet test --nologo Source/DafnyTestGeneration.Test/DafnyTestGeneration.Test.csproj --filter ${addedTestsCmd}`;
     },
     async addExisting(issueHint) {
       // Find all lines `async\s+Task\s+(...issueHint...)\s*` in any .cs file inside Source/DafnyTestGeneration.Test
@@ -1116,7 +1138,7 @@ async function doAddExistingOrNewTest(testManagers, moreText) {
     throw ABORTED;
   }
   await testManagers[test_type].create(programReproducingError);
-  testManagers[test_type].openAndYield();
+  await testManagers[test_type].openAndYield();
 }
 
 // We will want to run tests on the language server at some point
@@ -1176,7 +1198,7 @@ async function Main() {
       for(let k in testManagers) {
         var testManager = testManagers[k];
         if(await testManager.exists()) {
-          testManager.openAndYield();
+          await testManager.openAndYield();
         }
       }
     }
@@ -1259,6 +1281,8 @@ async function Main() {
         } else {
           console.log(testResult.log);
           console.log("The test did not pass. Please fix the issue and re-run this script after ensuring that the following command-line succeeds:\n");
+          // Print special characters to stdout so that it notifies the user (bell?)
+          process.stdout.write("\x07");
           for(let k in testManagers) {
             var testManager = testManagers[k];
             if(await testManager.exists()) {
