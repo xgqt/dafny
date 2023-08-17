@@ -376,7 +376,9 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
   }
   var shouldCompile = test_type == TEST_TYPE.INTEGRATION && ok(await question("Will the test need to be compiled? "+ACCEPT_HINT));
   var shouldRun = shouldCompile && (hasMain || ok(await question("Will the test need to be run (i.e. will have a Main() method)? "+ACCEPT_HINT)));
-  var shouldCompileBackend = shouldCompile ? await filterQuestion("Which back-end should be used? cs (default), js, java, go, cpp, py or all? ", ["", "cs", "js", "java", "go", "cpp", "py", "all"]) : "";
+  if(shouldCompile) {
+    console.log("All backends are going to be tested. If you want to modify the output of a particular backend or ignore one, please check Test/README.md.");
+  }
 
   programReproducingError = programReproducingError == "" ?
     (commandLineContent ?? (
@@ -385,13 +387,11 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
     return {programReproducingError, test_type};
   }
   var header = "";
-  var programArguments = "";
   if(shouldCompile) {
-    if(shouldCompileBackend == "") {
-      shouldCompileBackend = "cs";
-    }
-    var c = shouldRun ? "build" : "run";
-    if(shouldCompileBackend == "all") {
+    if(shouldRun) {
+      header += `// RUN: %testDafnyForEachCompiler "%s"\n\n`;
+    } else {
+      var c = "build";
       header += `// RUN: %baredafny verify %args "%s" > "%t"\n`;
       header += `// RUN: %baredafny ${c} %args --no-verify -t:cs "%s" >> "%t"\n`;
       header += `// RUN: %baredafny ${c} %args --no-verify -t:js "%s" >> "%t"\n`;
@@ -399,18 +399,14 @@ async function interactivelyCreateTestFileContent(issueNumber = null, commandLin
       header += `// RUN: %baredafny ${c} %args --no-verify -t:java "%s" >> "%t"\n`;
       header += `// RUN: %baredafny ${c} %args --no-verify -t:go "%s" >> "%t"\n`;
       header += `// RUN: %baredafny ${c} %args --no-verify -t:py "%s" >> "%t"\n`;
-      programArguments = `${c} -t:cs`;
-    } else {
-      programArguments = `${c} %args -t:${shouldCompileBackend}`;
-      header += `// RUN: %baredafny ${programArguments} "%s" > "%t"\n`;
+      header += `// RUN: %diff "%s.expect" "%t"\n\n`;
     }
   } else {
     var shouldVerify = ok(await question("Will the test eventually pass verification? "+ACCEPT_HINT));
     var shouldResolve = shouldVerify || ok(await question("Will the test eventually pass resolution? "+ACCEPT_HINT));
     header = `// RUN: ${(shouldVerify ? "" : (shouldResolve ? "%exits-with 4 " : "%exits-with 2 "))}%baredafny verify %args "%s" > "%t"\n`;
-    programArguments = "verify";
+    header += `// RUN: %diff "%s.expect" "%t"\n\n`;
   }
-  header += `// RUN: %diff "%s.expect" "%t"\n\n`;
   programReproducingError = header + programReproducingError;
   return {programReproducingError, test_type};
 }
@@ -424,7 +420,8 @@ async function getTestArguments(testFile) {
   if(match == null) {
     var match = testFileContent.match(/\/\/ RUN: %baredafny\s+(build|run|verify) %args(?:_0)? ([\s\S]+?)\s+"%s"(?![\s\S]*\/\/ RUN: %(bare)?dafny)/);
     if(match == null) {
-      return "verify";
+      var match = testFileContent.match(/\/\/ RUN: %testDafnyForEachCompiler/);
+      return "run -t go/cs/js/java/py/cpp";
     } else {
       return match[1] + " " + match[2];
     }
@@ -780,7 +777,7 @@ function getLanguageServerGutterIconsManager(issueNumber, issueKeyword, name = "
   const testTemplate = (methodName, content) => `[Fact]
   public async Task ${methodName}() {
     await VerifyTrace(@"
-${content.replace(/"/g,"\"\"")}", intermediates: false);
+${content.replace(/"/g,"\"\"")}", false, intermediates: false);
   }
  
   `;
