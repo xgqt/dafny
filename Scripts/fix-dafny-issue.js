@@ -416,14 +416,14 @@ async function getTestArguments(testFile) {
   var testFileContent = await fs.promises.readFile(testFile, { encoding: "utf8" });
   // Find '// RUN: %dafny_0 ... "%s" > "%t"' in testFileContent
   // and return what's in the ellipsis
-  var match = testFileContent.match(/\/\/ RUN: %dafny(?:_0)?\s+([\s\S]+?)\s+"%s"(?![\s\S]*\/\/ RUN: %(bare)?dafny)/);
+  var match = testFileContent.match(/\/\/ RUN: (?:%exits-with \d+ )?%dafny(?:_0)?\s+([\s\S]+?)\s+"%s"(?![\s\S]*\/\/ RUN: %(bare)?dafny)/);
   if(match == null) {
-    var match = testFileContent.match(/\/\/ RUN: %baredafny\s+(build|run|verify) %args(?:_0)? ([\s\S]+?)\s+"%s"(?![\s\S]*\/\/ RUN: %(bare)?dafny)/);
+    var match = testFileContent.match(/\/\/ RUN: (?:%exits-with \d+ )?%baredafny\s+(build|run|verify) %args(?:_0)?([\s\S]+?)"%s"(?![\s\S]*\/\/ RUN: %(bare)?dafny)/);
     if(match == null) {
       var match = testFileContent.match(/\/\/ RUN: %testDafnyForEachCompiler/);
       return "run -t go/cs/js/java/py/cpp";
     } else {
-      return match[1] + " " + match[2];
+      return (match[1] + " " + match[2]).trim();
     }
   } else {
     return match[1];
