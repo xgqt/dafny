@@ -9,20 +9,21 @@ using Xunit.Abstractions;
 namespace XUnitExtensions.Lit {
   public class ShellLitCommand : ILitCommand {
     private string shellCommand;
-    private string[] arguments;
+    public string[] Arguments { get; }
     private string[] passthroughEnvironmentVariables;
 
     public ShellLitCommand(string shellCommand, IEnumerable<string> arguments, IEnumerable<string> passthroughEnvironmentVariables) {
       this.shellCommand = shellCommand;
-      this.arguments = arguments.ToArray();
+      this.Arguments = arguments.ToArray();
       this.passthroughEnvironmentVariables = passthroughEnvironmentVariables.ToArray();
     }
 
-    public (int, string, string) Execute(ITestOutputHelper? outputHelper, TextReader? inputReader, TextWriter? outputWriter, TextWriter? errorWriter) {
+    public (int, string, string) Execute(TextReader inputReader,
+      TextWriter outputWriter, TextWriter errorWriter) {
       using var process = new Process();
 
       process.StartInfo.FileName = shellCommand;
-      foreach (var argument in arguments) {
+      foreach (var argument in Arguments) {
         process.StartInfo.ArgumentList.Add(argument);
       }
 
@@ -89,13 +90,17 @@ namespace XUnitExtensions.Lit {
       // codepage.  That's a bug there, and in the meantime the best hack we
       // have is to override that codepage by setting `OutputEncoding`.
 
+      Console.OutputEncoding = Encoding.UTF8;
       process.StartInfo.CreateNoWindow = false;
-      Console.OutputEncoding = System.Text.Encoding.UTF8;
 
       // Finally, for Java + Ubuntu, we make sure to set LANG:
-      process.StartInfo.EnvironmentVariables.Add("LANG", "C.UTF-8");
+      process.StartInfo.EnvironmentVariables["LANG"] = "C.UTF-8";
       // … and For Python + Windows, we set PYTHONIOENCODING
-      process.StartInfo.EnvironmentVariables.Add("PYTHONIOENCODING", "UTF-8");
+      process.StartInfo.EnvironmentVariables["PYTHONIOENCODING"] = "UTF-8";
+
+      // Note that all of this, except the Console.OutputEncoding part, is necessary only if we run compiled Dafny
+      // artifacts directly, since `dafny run` already enforces UTF-8 output.  The Console.OutputEncoding part is still
+      // needed because that is also what C# will use to decode the output of `process`.
 
       process.Start();
       if (inputReader != null) {
@@ -104,6 +109,8 @@ namespace XUnitExtensions.Lit {
         process.StandardInput.Write(input);
         process.StandardInput.Close();
       }
+
+      // FIXME the code below will deadlock if process fills the stderr buffer.
       string output = process.StandardOutput.ReadToEnd();
       outputWriter?.Write(output);
       outputWriter?.Close();
@@ -119,7 +126,7 @@ namespace XUnitExtensions.Lit {
       var builder = new StringBuilder();
       builder.Append(shellCommand);
       builder.Append(' ');
-      builder.AppendJoin(" ", arguments);
+      builder.AppendJoin(" ", Arguments);
       return builder.ToString();
     }
   }

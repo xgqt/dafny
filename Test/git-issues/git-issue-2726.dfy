@@ -1,4 +1,4 @@
-// RUN: %dafny_0 /compile:1 /compileTarget:cs "%s" > "%t"
+// RUN: %dafny /compile:1 /compileTarget:cs "%s" > "%t"
 // RUN: %diff "%s.expect" "%t"
 
 datatype Formula =
@@ -6,7 +6,7 @@ datatype Formula =
   | Not(underlying: Formula)
   | True
 {
-  function method size(): nat {
+  function size(): nat {
     match this
     case And(l, r) => l.size() + r.size()
     case Not(u) => u.size() + 1

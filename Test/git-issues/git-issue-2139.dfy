@@ -1,8 +1,8 @@
-// RUN: %dafny_0 /compile:0 "%s" > "%t"
+// RUN: %exits-with 2 %dafny /compile:0 "%s" > "%t"
 // RUN: %diff "%s.expect" "%t"
 
 datatype T = T(T, T) {
-  predicate P() {
+  ghost predicate P() {
     match this
       case T(0, 1) => false
   }

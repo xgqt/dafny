@@ -1,4 +1,4 @@
-// RUN: %dafny_0 /compile:0 "%s" > "%t"
+// RUN: %exits-with 4 %dafny /compile:0 "%s" > "%t"
 // RUN: %diff "%s.expect" "%t"
 
 abstract module StillAsby {
@@ -13,14 +13,14 @@ abstract module Absy {
 }
 
 abstract module Absy2 {
-  function f(): int { 0 / 0 }
+  ghost function f(): int { 0 / 0 }
 }
 
 abstract module StillAsby2 refines Absy2 {
 }
 
 abstract module Absy3 {
-  function f(): int { 0 / 0 }
+  ghost function f(): int { 0 / 0 }
 }
 
 abstract module StillAsby3 {

@@ -1,9 +1,8 @@
-// RUN: %dafny_0 /compile:3 /compileTarget:cs "%s" > "%t"
-// RUN: %diff "%s.expect" "%t"
+// RUN: %testDafnyForEachCompiler "%s" -- --relax-definite-assignment
 
 const digits := ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
-function method IntToString(i: int): string   
+function IntToString(i: int): string   
   decreases i < 0, if i<0 then -i else i
 {
   if i < 0 then ("-" + IntToString(-i))
